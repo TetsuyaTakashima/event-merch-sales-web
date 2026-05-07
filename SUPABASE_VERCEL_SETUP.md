@@ -18,6 +18,8 @@ secret keyやservice role keyはブラウザアプリやVercelの公開環境変
 
 最初にアカウント作成したユーザーが管理者になります。2人目以降は販売スタッフとして作成されますが、管理者がユーザー管理画面で有効化するまで承認待ちになります。
 
+ユーザー更新時に `permission denied for table profiles` が出る場合は、`supabase/grants.sql` の全文をSQL Editorで実行してください。新しいSupabaseプロジェクトでは、テーブルのData API権限を明示的に付与する必要がある場合があります。
+
 ## 3. ローカル確認
 
 Node.jsが入っている場合のみ必要です。

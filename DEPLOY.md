@@ -38,6 +38,8 @@ Supabase標準のメール送信は検証用です。送信先制限や低い送
 
 ユーザー管理画面でログインIDや仮パスワードを変更する場合は、Vercelに `SUPABASE_SERVICE_ROLE_KEY` を設定してください。このキーはサーバー関数だけで使うため、`VITE_` を付けず、ブラウザ側に公開しません。
 
+ユーザー更新時に `permission denied for table profiles` が出る場合は、Supabase SQL Editorで `supabase/grants.sql` を実行してください。
+
 ## ローカル確認
 
 ```powershell
