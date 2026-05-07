@@ -22,6 +22,7 @@
 | --- | --- |
 | `VITE_SUPABASE_URL` | Supabase Project URL |
 | `VITE_SUPABASE_ANON_KEY` | Supabase anon/publishable key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service_role key |
 
 6. VercelでDeployする。
 7. SupabaseのAuthentication > URL Configurationで、Vercelの公開URLをSite URLとRedirect URLsに追加する。
@@ -34,6 +35,8 @@ http://localhost:5173/**
 ```
 
 Supabase標準のメール送信は検証用です。送信先制限や低い送信数制限があるため、実運用ではSupabaseのAuthentication > SMTP SettingsでCustom SMTPを設定してください。
+
+ユーザー管理画面でログインIDや仮パスワードを変更する場合は、Vercelに `SUPABASE_SERVICE_ROLE_KEY` を設定してください。このキーはサーバー関数だけで使うため、`VITE_` を付けず、ブラウザ側に公開しません。
 
 ## ローカル確認
 

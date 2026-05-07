@@ -58,6 +58,9 @@ npm run dev
 | --- | --- |
 | `VITE_SUPABASE_URL` | SupabaseのProject URL |
 | `VITE_SUPABASE_ANON_KEY` | Supabaseのanon/publishable key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabaseのservice_role key |
+
+`SUPABASE_SERVICE_ROLE_KEY` は管理者がユーザーのログインIDや仮パスワードを変更するために使います。VercelのEnvironment Variablesにだけ設定し、`VITE_` を付けないでください。ブラウザ側に公開してはいけません。
 
 6. Deployを押します。
 
@@ -85,7 +88,7 @@ Supabase標準のメール送信は検証用です。標準状態では送信先
 3. 最初のユーザーは自動で管理者になります。
 4. 追加スタッフも公開URLでアカウント作成します。
 5. 追加スタッフは承認待ち画面になります。
-6. 管理者がユーザー管理画面で有効化し、必要に応じて権限を変更します。
+6. 管理者がユーザー管理画面で有効化し、必要に応じてログインID、仮パスワード、権限を変更します。
 
 ## 注意
 

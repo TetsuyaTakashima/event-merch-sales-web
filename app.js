@@ -1382,7 +1382,7 @@ function renderProductRow(row, canManage) {
 function renderUsers() {
   const canManage = can("manageUsers");
   const addUserBody = isSupabaseMode
-    ? `<div class="notice">新しいスタッフはログイン画面の「アカウントを作成」から登録します。登録後、この一覧で権限を変更できます。</div>`
+    ? `<div class="notice">新しいスタッフはログイン画面の「アカウントを作成」から登録します。登録後、この一覧でログインID、仮パスワード、権限を変更できます。パスワードは入力した場合のみ変更されます。</div>`
     : `
         <form class="form-grid three" data-action="add-user">
           <div class="field">
@@ -1413,6 +1413,7 @@ function renderUsers() {
             <thead>
               <tr>
                 <th>名前</th>
+                ${isSupabaseMode ? "<th>ログインID</th><th>仮パスワード</th>" : ""}
                 <th>権限</th>
                 <th>状態</th>
                 <th>操作</th>
@@ -1429,7 +1430,7 @@ function renderUsers() {
       <div class="panel-header">
         <div>
           <h2>ユーザー追加</h2>
-          <p>初期実装では認証情報は扱わず、操作権限のみ管理</p>
+          <p>${isSupabaseMode ? "アカウント作成後のログイン情報と権限を管理" : "操作権限のみ管理"}</p>
         </div>
       </div>
       <div class="panel-body">
@@ -1449,6 +1450,20 @@ function renderUserRow(user, canManage) {
         <input class="input table-input" name="userName" value="${escapeAttribute(user.name)}" ${saveDisabled ? "disabled" : ""}>
         ${user.id === state.currentUserId ? `<div class="muted">現在の操作ユーザー</div>` : ""}
       </td>
+      ${
+        isSupabaseMode
+          ? `
+            <td>
+              <input class="input table-input" name="userEmail" type="email" value="${escapeAttribute(user.email || "")}" placeholder="mail@example.com" ${saveDisabled ? "disabled" : ""}>
+              <div class="muted">メールアドレスでログイン</div>
+            </td>
+            <td>
+              <input class="input table-input" name="userPassword" type="password" autocomplete="new-password" placeholder="変更時のみ入力" ${saveDisabled ? "disabled" : ""}>
+              <div class="muted">6文字以上</div>
+            </td>
+          `
+          : ""
+      }
       <td>
         <select class="select table-input" name="userRole" ${saveDisabled ? "disabled" : ""}>
           ${Object.entries(roles).map(([key, label]) => `<option value="${key}" ${user.role === key ? "selected" : ""}>${label}</option>`).join("")}
@@ -2285,11 +2300,28 @@ async function saveUser(userId, row) {
   if (!user || !row) return;
 
   const name = row.querySelector('[name="userName"]')?.value.trim() ?? "";
+  const email = row.querySelector('[name="userEmail"]')?.value.trim() ?? user.email ?? "";
+  const password = row.querySelector('[name="userPassword"]')?.value ?? "";
   const role = row.querySelector('[name="userRole"]')?.value ?? user.role;
   const active = row.querySelector('[name="userActive"]')?.value === "true";
 
   if (!name) {
     showToast("ユーザー名を入力してください");
+    return;
+  }
+
+  if (isSupabaseMode && !email) {
+    showToast("ログインIDを入力してください");
+    return;
+  }
+
+  if (isSupabaseMode && !email.includes("@")) {
+    showToast("ログインIDはメールアドレス形式で入力してください");
+    return;
+  }
+
+  if (isSupabaseMode && password && password.length < 6) {
+    showToast("パスワードは6文字以上で入力してください");
     return;
   }
 
@@ -2314,14 +2346,16 @@ async function saveUser(userId, row) {
   }
 
   user.name = name;
+  user.email = email;
   user.role = role;
   user.active = active;
 
   if (isSupabaseMode) {
-    const { error } = await supabase.from("profiles").update({ name, role, active }).eq("id", user.id);
-    if (error) {
-      console.error("Failed to update profile.", error);
-      showToast("ユーザー更新に失敗しました");
+    try {
+      await updateUserByAdmin({ userId: user.id, name, email, role, active, password });
+    } catch (error) {
+      console.error("Failed to update user.", error);
+      showToast(authErrorMessage(error, "ユーザー更新に失敗しました"), 7000);
       return;
     }
     await loadRemoteData();
@@ -2330,6 +2364,29 @@ async function saveUser(userId, row) {
   saveState();
   showToast("ユーザーを更新しました");
   render();
+}
+
+async function updateUserByAdmin(payload) {
+  const session = authSession || (await supabase.auth.getSession()).data.session;
+  if (!session?.access_token) throw new Error("ログイン情報を確認できません");
+
+  const response = await fetch("/api/admin-update-user", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({
+      ...payload,
+      password: payload.password || "",
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || "ユーザー情報を変更できませんでした");
+  }
+  return result;
 }
 
 async function deleteUser(userId) {
