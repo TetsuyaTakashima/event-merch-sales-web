@@ -416,6 +416,12 @@ function render() {
     return;
   }
 
+  if (isSupabaseMode && authSession && ui.authMode === "update-password") {
+    app.innerHTML = renderAuth();
+    bindAppEvents(app);
+    return;
+  }
+
   if (isSupabaseMode && authSession && authProfile && !authProfile.active) {
     app.innerHTML = renderPendingApproval();
     bindAppEvents(app);
@@ -467,6 +473,17 @@ function renderLoading() {
 
 function renderAuth() {
   const isSignUp = ui.authMode === "sign-up";
+  const isForgotPassword = ui.authMode === "forgot-password";
+  const isUpdatePassword = ui.authMode === "update-password";
+  const title = isUpdatePassword ? "新しいパスワード設定" : isForgotPassword ? "パスワード再設定" : isSignUp ? "アカウント作成" : "ログイン";
+  const description = isUpdatePassword
+    ? "新しいパスワードを入力してください。"
+    : isForgotPassword
+      ? "登録済みメールアドレスに再設定リンクを送信します。"
+      : "複数スタッフで同じ売上・在庫データを共有します。";
+  const submitLabel = isUpdatePassword ? "パスワードを保存" : isForgotPassword ? "再設定メールを送信" : isSignUp ? "作成" : "ログイン";
+  const passwordAutocomplete = isSignUp || isUpdatePassword ? "new-password" : "current-password";
+
   return `
     <main class="auth-page">
       <section class="auth-panel">
@@ -479,22 +496,42 @@ function renderAuth() {
         </div>
         <form class="stack" data-action="auth-form">
           <div>
-            <h1>${isSignUp ? "アカウント作成" : "ログイン"}</h1>
-            <p class="muted">複数スタッフで同じ売上・在庫データを共有します。</p>
+            <h1>${title}</h1>
+            <p class="muted">${description}</p>
           </div>
           ${isSignUp ? `<div class="field"><label for="auth-name">名前</label><input id="auth-name" class="input" name="name" autocomplete="name" required></div>` : ""}
-          <div class="field">
-            <label for="auth-email">メールアドレス</label>
-            <input id="auth-email" class="input" name="email" type="email" autocomplete="email" required>
-          </div>
-          <div class="field">
-            <label for="auth-password">パスワード</label>
-            <input id="auth-password" class="input" name="password" type="password" autocomplete="${isSignUp ? "new-password" : "current-password"}" required minlength="6">
-          </div>
-          <button class="button" type="submit">${icon("check")}${isSignUp ? "作成" : "ログイン"}</button>
-          <button class="button secondary" data-action="toggle-auth-mode" type="button">
-            ${isSignUp ? "ログインに戻る" : "アカウントを作成"}
-          </button>
+          ${isUpdatePassword ? "" : `
+            <div class="field">
+              <label for="auth-email">メールアドレス</label>
+              <input id="auth-email" class="input" name="email" type="email" autocomplete="email" required>
+            </div>
+          `}
+          ${isForgotPassword ? "" : `
+            <div class="field">
+              <label for="auth-password">${isUpdatePassword ? "新しいパスワード" : "パスワード"}</label>
+              <input id="auth-password" class="input" name="password" type="password" autocomplete="${passwordAutocomplete}" required minlength="6">
+            </div>
+          `}
+          ${isUpdatePassword ? `
+            <div class="field">
+              <label for="auth-password-confirm">新しいパスワード 確認</label>
+              <input id="auth-password-confirm" class="input" name="passwordConfirm" type="password" autocomplete="new-password" required minlength="6">
+            </div>
+          ` : ""}
+          <button class="button" type="submit">${icon(isForgotPassword ? "mail" : isUpdatePassword ? "save" : "check")}${submitLabel}</button>
+          ${isUpdatePassword ? `
+            <button class="button secondary" data-action="cancel-password-update" type="button">ログインに戻る</button>
+          ` : `
+            <button class="button secondary" data-action="toggle-auth-mode" type="button">
+              ${isSignUp ? "ログインに戻る" : "アカウントを作成"}
+            </button>
+          `}
+          ${!isSignUp && !isForgotPassword && !isUpdatePassword ? `
+            <button class="text-button" data-action="set-auth-mode" data-auth-mode="forgot-password" type="button">パスワードを忘れた方はこちら</button>
+          ` : ""}
+          ${isForgotPassword ? `
+            <button class="text-button" data-action="set-auth-mode" data-auth-mode="sign-in" type="button">ログインに戻る</button>
+          ` : ""}
         </form>
         ${ui.toast ? `<div class="toast">${escapeHtml(ui.toast)}</div>` : ""}
       </section>
@@ -1456,7 +1493,21 @@ function handleClick(event) {
 
   if (action === "toggle-auth-mode") {
     ui.authMode = ui.authMode === "sign-in" ? "sign-up" : "sign-in";
+    ui.toast = "";
     render();
+    return;
+  }
+
+  if (action === "set-auth-mode") {
+    ui.authMode = target.dataset.authMode || "sign-in";
+    ui.toast = "";
+    render();
+    return;
+  }
+
+  if (action === "cancel-password-update") {
+    ui.authMode = "sign-in";
+    signOut();
     return;
   }
 
@@ -1665,6 +1716,15 @@ async function handleAuth(form) {
   if (!isSupabaseMode) return;
 
   const data = new FormData(form);
+  if (ui.authMode === "forgot-password") {
+    await sendPasswordReset(data);
+    return;
+  }
+  if (ui.authMode === "update-password") {
+    await updatePassword(data);
+    return;
+  }
+
   const email = String(data.get("email")).trim();
   const password = String(data.get("password"));
   const name = String(data.get("name") || "").trim();
@@ -1704,6 +1764,82 @@ async function handleAuth(form) {
   }
 }
 
+async function sendPasswordReset(data) {
+  const email = String(data.get("email") || "").trim();
+  if (!email) {
+    showToast("メールアドレスを入力してください");
+    return;
+  }
+
+  appReady = false;
+  render();
+
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: passwordResetRedirectUrl(),
+    });
+    if (error) throw error;
+
+    appReady = true;
+    ui.authMode = "sign-in";
+    showToast("再設定メールを送信しました");
+    render();
+  } catch (error) {
+    console.error("Password reset email failed.", error);
+    appReady = true;
+    showToast("再設定メールを送信できませんでした");
+    render();
+  }
+}
+
+async function updatePassword(data) {
+  const password = String(data.get("password") || "");
+  const passwordConfirm = String(data.get("passwordConfirm") || "");
+
+  if (password.length < 6) {
+    showToast("パスワードは6文字以上で入力してください");
+    return;
+  }
+  if (password !== passwordConfirm) {
+    showToast("確認用パスワードが一致しません");
+    return;
+  }
+
+  appReady = false;
+  render();
+
+  try {
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) throw error;
+
+    await supabase.auth.signOut();
+    authSession = null;
+    authProfile = null;
+    state = seedState();
+    appReady = true;
+    ui.authMode = "sign-in";
+    showToast("パスワードを更新しました。新しいパスワードでログインしてください");
+    render();
+  } catch (error) {
+    console.error("Password update failed.", error);
+    appReady = true;
+    showToast("パスワードを更新できませんでした");
+    render();
+  }
+}
+
+function passwordResetRedirectUrl() {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function isPasswordRecoveryUrl() {
+  const currentUrl = `${window.location.search}${window.location.hash}`;
+  return currentUrl.includes("type=recovery");
+}
+
 async function signOut() {
   if (!isSupabaseMode) return;
   await supabase.auth.signOut();
@@ -1711,6 +1847,7 @@ async function signOut() {
   authProfile = null;
   state = seedState();
   appReady = true;
+  ui.authMode = "sign-in";
   render();
 }
 
@@ -2767,6 +2904,7 @@ function icon(name) {
     upload: `<path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M5 3h14"/>`,
     refresh: `<path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/>`,
     save: `<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>`,
+    mail: `<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>`,
     play: `<path d="M8 5v14l11-7-11-7z"/>`,
     lock: `<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>`,
     logout: `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>`,
@@ -2789,18 +2927,36 @@ async function initApp() {
 
   try {
     authSession = (await supabase.auth.getSession()).data.session;
-    if (authSession) {
+    if (authSession && isPasswordRecoveryUrl()) {
+      ui.authMode = "update-password";
+    }
+    if (authSession && ui.authMode !== "update-password") {
       await loadRemoteData();
     }
     appReady = true;
     render();
 
-    supabase.auth.onAuthStateChange(async (_event, session) => {
+    supabase.auth.onAuthStateChange(async (authEvent, session) => {
       authSession = session;
+      if (authEvent === "PASSWORD_RECOVERY") {
+        ui.authMode = "update-password";
+        appReady = true;
+        render();
+        return;
+      }
+      if (!session) {
+        authProfile = null;
+        ui.authMode = "sign-in";
+        appReady = true;
+        render();
+        return;
+      }
       if (session) {
         appReady = false;
         render();
-        await loadRemoteData();
+        if (ui.authMode !== "update-password") {
+          await loadRemoteData();
+        }
       }
       appReady = true;
       render();

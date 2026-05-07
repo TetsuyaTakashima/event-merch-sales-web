@@ -24,6 +24,14 @@
 | `VITE_SUPABASE_ANON_KEY` | Supabase anon/publishable key |
 
 6. VercelでDeployする。
+7. SupabaseのAuthentication > URL Configurationで、Vercelの公開URLをSite URLとRedirect URLsに追加する。
+
+パスワード再設定メールを使う場合、Redirect URLsには以下のようなURLを入れます。
+
+```text
+https://your-app.vercel.app/**
+http://localhost:5173/**
+```
 
 ## ローカル確認
 
@@ -39,4 +47,3 @@ npm run dev
 ## 補足
 
 `netlify.toml` も残していますが、今回の推奨はVercelです。Netlifyを使う場合も、Vercelと同じく環境変数を設定して `npm run build` で `dist` を公開します。
-

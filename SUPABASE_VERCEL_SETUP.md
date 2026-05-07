@@ -61,7 +61,22 @@ npm run dev
 
 6. Deployを押します。
 
-## 6. スタッフ追加
+## 6. Supabase AuthのURL設定
+
+パスワード再設定メールからアプリに戻れるように、Vercelの公開URLをSupabaseに登録します。
+
+1. SupabaseのAuthentication > URL Configurationを開きます。
+2. Site URLにVercelの公開URLを設定します。
+3. Redirect URLsに以下を追加します。
+
+```text
+https://your-app.vercel.app/**
+http://localhost:5173/**
+```
+
+`https://your-app.vercel.app` は実際のVercel URLに置き換えてください。
+
+## 7. スタッフ追加
 
 1. 公開URLを開きます。
 2. 最初のユーザーが「アカウントを作成」します。
