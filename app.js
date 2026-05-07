@@ -30,6 +30,7 @@ const permissions = {
     manageEvents: true,
     manageUsers: true,
     manageData: true,
+    deleteCancelledSales: true,
     exportCsv: true,
     viewReports: true,
   },
@@ -42,6 +43,7 @@ const permissions = {
     manageEvents: true,
     manageUsers: false,
     manageData: true,
+    deleteCancelledSales: true,
     exportCsv: true,
     viewReports: true,
   },
@@ -54,6 +56,7 @@ const permissions = {
     manageEvents: false,
     manageUsers: false,
     manageData: false,
+    deleteCancelledSales: false,
     exportCsv: false,
     viewReports: true,
   },
@@ -66,6 +69,7 @@ const permissions = {
     manageEvents: false,
     manageUsers: false,
     manageData: false,
+    deleteCancelledSales: false,
     exportCsv: true,
     viewReports: true,
   },
@@ -1116,9 +1120,7 @@ function renderSalesTable(sales, withActions) {
                   ${
                     withActions
                       ? `<td data-label="操作">
-                          <button class="button secondary" data-action="cancel-sale" data-sale-id="${sale.id}" type="button" ${sale.status !== "completed" || !canCancelSale(sale) ? "disabled" : ""}>
-                            ${icon("x")}取消
-                          </button>
+                          ${renderSaleActions(sale)}
                         </td>`
                       : ""
                   }
@@ -1129,6 +1131,22 @@ function renderSalesTable(sales, withActions) {
         </tbody>
       </table>
     </div>
+  `;
+}
+
+function renderSaleActions(sale) {
+  if (sale.status === "cancelled") {
+    return `
+      <button class="button danger" data-action="delete-cancelled-sale" data-sale-id="${sale.id}" type="button" ${!canDeleteCancelledSale(sale) ? "disabled" : ""}>
+        ${icon("trash")}削除
+      </button>
+    `;
+  }
+
+  return `
+    <button class="button secondary" data-action="cancel-sale" data-sale-id="${sale.id}" type="button" ${!canCancelSale(sale) ? "disabled" : ""}>
+      ${icon("x")}取消
+    </button>
   `;
 }
 
@@ -1884,6 +1902,11 @@ function handleClick(event) {
     return;
   }
 
+  if (action === "delete-cancelled-sale") {
+    deleteCancelledSale(target.dataset.saleId);
+    return;
+  }
+
   if (action === "export-csv") {
     exportCsv(target.dataset.export);
     return;
@@ -2362,6 +2385,22 @@ function cancelSale(saleId) {
 
   saveState();
   showToast("販売を取消しました");
+}
+
+function deleteCancelledSale(saleId) {
+  const sale = state.sales.find((item) => item.id === saleId);
+  if (!sale || sale.status !== "cancelled") return;
+  if (!canDeleteCancelledSale(sale)) {
+    showToast("現在の権限では削除できません");
+    return;
+  }
+
+  const ok = confirm("取消済みの販売履歴を削除します。削除後はバックアップ以外から戻せません。よろしいですか？");
+  if (!ok) return;
+
+  state.sales = state.sales.filter((item) => item.id !== sale.id);
+  saveState();
+  showToast("取消済みの販売履歴を削除しました");
 }
 
 function addEvent(form) {
@@ -3168,6 +3207,10 @@ function canCancelSale(sale) {
   if (user.role !== "staff" || sale.userId !== user.id) return false;
   const ageMinutes = (Date.now() - new Date(sale.createdAt).getTime()) / 60000;
   return ageMinutes <= 15;
+}
+
+function canDeleteCancelledSale(sale) {
+  return sale?.status === "cancelled" && can("deleteCancelledSales");
 }
 
 function completedSales(eventId) {
