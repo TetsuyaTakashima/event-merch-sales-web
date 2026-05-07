@@ -44,6 +44,7 @@ textarea {
 
 button {
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 button:disabled {
@@ -228,6 +229,33 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.menu-layout {
+  display: grid;
+  gap: 20px;
+}
+
+.menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr)) minmax(180px, auto) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.account-summary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.menu-actions {
+  display: flex;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
@@ -514,6 +542,11 @@ button:disabled {
   justify-content: space-between;
   gap: 8px;
   margin-top: auto;
+}
+
+.product-card footer .button {
+  min-width: 96px;
+  flex: 0 0 auto;
 }
 
 .price {
@@ -951,15 +984,21 @@ th.numeric {
   .topbar {
     align-items: stretch;
     flex-direction: column;
-    padding: 14px 16px;
+    min-height: auto;
+    padding: 12px 16px;
   }
 
   .topbar-actions {
-    justify-content: stretch;
+    display: none;
   }
 
-  .topbar-actions > * {
-    flex: 1 1 160px;
+  .topbar-title h1 {
+    font-size: 20px;
+  }
+
+  .topbar-title p {
+    font-size: 12px;
+    line-height: 1.35;
   }
 
   .content {
@@ -975,8 +1014,41 @@ th.numeric {
     grid-template-columns: 1fr;
   }
 
+  .menu-grid,
+  .menu-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .menu-grid {
+    align-items: stretch;
+  }
+
+  .menu-actions {
+    display: grid;
+  }
+
+  .menu-actions > .button,
+  .menu-actions > .import-button {
+    width: 100%;
+  }
+
   .product-grid {
     grid-template-columns: 1fr;
+  }
+
+  .product-card {
+    min-height: auto;
+  }
+
+  .product-card footer {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .product-card footer .button {
+    width: 100%;
+    min-height: 48px;
   }
 
   .segmented {

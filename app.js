@@ -28,6 +28,7 @@ const permissions = {
     manageProducts: true,
     manageEvents: true,
     manageUsers: true,
+    manageData: true,
     exportCsv: true,
     viewReports: true,
   },
@@ -39,6 +40,7 @@ const permissions = {
     manageProducts: true,
     manageEvents: true,
     manageUsers: false,
+    manageData: true,
     exportCsv: true,
     viewReports: true,
   },
@@ -50,6 +52,7 @@ const permissions = {
     manageProducts: false,
     manageEvents: false,
     manageUsers: false,
+    manageData: false,
     exportCsv: false,
     viewReports: true,
   },
@@ -61,6 +64,7 @@ const permissions = {
     manageProducts: false,
     manageEvents: false,
     manageUsers: false,
+    manageData: false,
     exportCsv: true,
     viewReports: true,
   },
@@ -75,6 +79,7 @@ const navItems = [
   { id: "events", label: "イベント", icon: "calendar" },
   { id: "products", label: "商品", icon: "tag" },
   { id: "users", label: "ユーザー", icon: "users" },
+  { id: "menu", label: "メニュー", icon: "menu" },
 ];
 
 const viewTitles = {
@@ -86,6 +91,7 @@ const viewTitles = {
   events: "イベント管理",
   products: "商品管理",
   users: "ユーザー管理",
+  menu: "メニュー",
 };
 
 let state = isSupabaseMode ? seedState() : loadState();
@@ -568,15 +574,37 @@ function renderPendingApproval() {
   `;
 }
 
+function renderEventOptions(activeEventId = state.selectedEventId) {
+  return state.events.map((event) => `<option value="${event.id}" ${event.id === activeEventId ? "selected" : ""}>${escapeHtml(event.name)}</option>`).join("");
+}
+
+function renderUserOptions() {
+  const currentUser = getCurrentUser();
+  if (isSupabaseMode) {
+    return `<option value="${currentUser.id}">${escapeHtml(currentUser.name)} / ${roles[currentUser.role] || currentUser.role}</option>`;
+  }
+
+  return state.users
+    .filter((user) => user.active)
+    .map((user) => `<option value="${user.id}" ${user.id === state.currentUserId ? "selected" : ""}>${escapeHtml(user.name)} / ${roles[user.role]}</option>`)
+    .join("");
+}
+
+function renderDataActions(scope) {
+  const restoreId = `restore-file-${scope}`;
+  return `
+    <button class="button secondary" data-action="backup-data" type="button">${icon("download")}バックアップ</button>
+    <label class="button secondary import-button" for="${restoreId}">${icon("upload")}復元</label>
+    <input id="${restoreId}" class="visually-hidden" data-action="restore-data" type="file" accept="application/json,.json">
+    <button class="button secondary" data-action="reset-demo" type="button">${icon("refresh")}初期データに戻す</button>
+  `;
+}
+
 function shell(content) {
   const activeEvent = getActiveEvent();
   const currentUser = getCurrentUser();
-  const currentUserOptions = isSupabaseMode
-    ? `<option value="${currentUser.id}">${escapeHtml(currentUser.name)} / ${roles[currentUser.role] || currentUser.role}</option>`
-    : state.users
-        .filter((user) => user.active)
-        .map((user) => `<option value="${user.id}" ${user.id === state.currentUserId ? "selected" : ""}>${escapeHtml(user.name)} / ${roles[user.role]}</option>`)
-        .join("");
+  const currentUserOptions = renderUserOptions();
+  const canManageData = can("manageData");
   const nav = navItems
     .map(
       (item) => `
@@ -615,18 +643,13 @@ function shell(content) {
           </div>
           <div class="topbar-actions">
             <select class="select" data-action="select-event" aria-label="対象イベント">
-              ${state.events
-                .map((event) => `<option value="${event.id}" ${event.id === activeEvent.id ? "selected" : ""}>${escapeHtml(event.name)}</option>`)
-                .join("")}
+              ${renderEventOptions(activeEvent.id)}
             </select>
             <select class="select" data-action="select-user" aria-label="操作ユーザー" ${isSupabaseMode ? "disabled" : ""}>
               ${currentUserOptions}
             </select>
             ${isSupabaseMode ? `<span class="status info">${escapeHtml(syncStatus)}</span><button class="button secondary" data-action="sign-out" type="button">${icon("logout")}ログアウト</button>` : ""}
-            <button class="button secondary" data-action="backup-data" type="button">${icon("download")}バックアップ</button>
-            <label class="button secondary import-button" for="restore-file">${icon("upload")}復元</label>
-            <input id="restore-file" class="visually-hidden" data-action="restore-data" type="file" accept="application/json,.json">
-            <button class="button secondary" data-action="reset-demo" type="button">${icon("refresh")}初期データに戻す</button>
+            ${canManageData ? renderDataActions("topbar") : ""}
           </div>
         </header>
         <section class="content">${content}</section>
@@ -645,7 +668,63 @@ function renderView() {
   if (ui.view === "events") return renderEvents();
   if (ui.view === "products") return renderProducts();
   if (ui.view === "users") return renderUsers();
+  if (ui.view === "menu") return renderMenu();
   return renderDashboard();
+}
+
+function renderMenu() {
+  const currentUser = getCurrentUser();
+  const canManageData = can("manageData");
+
+  return `
+    <div class="menu-layout">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>イベント・アカウント</h2>
+            <p>作業対象とログイン状態を確認</p>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="menu-grid">
+            <div class="field">
+              <label for="menu-event">対象イベント</label>
+              <select id="menu-event" class="select" data-action="select-event">
+                ${renderEventOptions()}
+              </select>
+            </div>
+            <div class="field">
+              <label for="menu-user">操作ユーザー</label>
+              <select id="menu-user" class="select" data-action="select-user" ${isSupabaseMode ? "disabled" : ""}>
+                ${renderUserOptions()}
+              </select>
+            </div>
+            <div class="account-summary">
+              <span class="role-badge">${roles[currentUser.role]}</span>
+              <strong>${escapeHtml(currentUser.name)}</strong>
+              ${isSupabaseMode ? `<span class="status info">${escapeHtml(syncStatus)}</span>` : `<span class="status info">ローカル保存</span>`}
+            </div>
+            ${isSupabaseMode ? `<button class="button secondary" data-action="sign-out" type="button">${icon("logout")}ログアウト</button>` : ""}
+          </div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>データ操作</h2>
+            <p>バックアップ、復元、初期化</p>
+          </div>
+        </div>
+        <div class="panel-body">
+          ${
+            canManageData
+              ? `<div class="menu-actions">${renderDataActions("menu")}</div>`
+              : `<div class="notice">バックアップ、復元、初期データへの戻しは管理者または現場責任者のみ利用できます。</div>`
+          }
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderDashboard() {
@@ -1628,6 +1707,10 @@ function handleClick(event) {
   }
 
   if (action === "reset-demo") {
+    if (!can("manageData")) {
+      showToast("現在の権限では初期データに戻せません");
+      return;
+    }
     if (confirm("サンプルデータに戻します。現在のローカルデータは消えます。")) {
       state = seedState();
       ui = {
@@ -1647,6 +1730,10 @@ function handleClick(event) {
   }
 
   if (action === "backup-data") {
+    if (!can("manageData")) {
+      showToast("現在の権限ではバックアップを出力できません");
+      return;
+    }
     backupData();
     return;
   }
@@ -1814,6 +1901,11 @@ function handleChange(event) {
   }
 
   if (action === "restore-data") {
+    if (!can("manageData")) {
+      target.value = "";
+      showToast("現在の権限ではバックアップを復元できません");
+      return;
+    }
     restoreDataFromFile(target);
   }
 }
@@ -2690,6 +2782,11 @@ async function deleteUser(userId) {
 }
 
 function backupData() {
+  if (!can("manageData")) {
+    showToast("現在の権限ではバックアップを出力できません");
+    return;
+  }
+
   const payload = {
     app: "event-merch-sales-web",
     version: 1,
@@ -2701,6 +2798,12 @@ function backupData() {
 }
 
 async function restoreDataFromFile(input) {
+  if (!can("manageData")) {
+    input.value = "";
+    showToast("現在の権限ではバックアップを復元できません");
+    return;
+  }
+
   const file = input.files?.[0];
   if (!file) return;
 
@@ -3282,6 +3385,7 @@ function icon(name) {
     calendar: `<path d="M7 3v4"/><path d="M17 3v4"/><path d="M4 7h16"/><rect x="4" y="5" width="16" height="16" rx="2"/>`,
     tag: `<path d="M20 12l-8 8-9-9V4h7l10 8z"/><circle cx="7.5" cy="7.5" r="1"/>`,
     users: `<path d="M16 21v-2a4 4 0 0 0-8 0v2"/><circle cx="12" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>`,
+    menu: `<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>`,
     plus: `<path d="M12 5v14"/><path d="M5 12h14"/>`,
     minus: `<path d="M5 12h14"/>`,
     trash: `<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>`,
