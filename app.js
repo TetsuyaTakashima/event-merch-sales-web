@@ -1787,7 +1787,7 @@ async function sendPasswordReset(data) {
   } catch (error) {
     console.error("Password reset email failed.", error);
     appReady = true;
-    showToast("再設定メールを送信できませんでした");
+    showToast(authErrorMessage(error, "再設定メールを送信できませんでした"), 7000);
     render();
   }
 }
@@ -2787,14 +2787,31 @@ function eventStatusLabel(status) {
   return "準備中";
 }
 
-function showToast(message) {
+function showToast(message, duration = 2200) {
   ui.toast = message;
   render();
   window.clearTimeout(showToast.timer);
   showToast.timer = window.setTimeout(() => {
     ui.toast = "";
     render();
-  }, 2200);
+  }, duration);
+}
+
+function authErrorMessage(error, fallback) {
+  const message = String(error?.message || "");
+  const normalized = message.toLowerCase();
+
+  if (message.includes("Email address not authorized")) {
+    return "Supabase標準メールでは送信先が制限されています。Custom SMTPを設定してください。";
+  }
+  if (normalized.includes("rate limit") || message.includes("For security purposes")) {
+    return "メール送信制限に達しています。時間を置くかCustom SMTPを設定してください。";
+  }
+  if (normalized.includes("redirect")) {
+    return "SupabaseのRedirect URLsにVercelのURLを追加してください。";
+  }
+
+  return message ? `${fallback}: ${message}` : fallback;
 }
 
 function downloadCsv(filename, rows) {

@@ -76,6 +76,8 @@ http://localhost:5173/**
 
 `https://your-app.vercel.app` は実際のVercel URLに置き換えてください。
 
+Supabase標準のメール送信は検証用です。標準状態では送信先がプロジェクトのチームメンバーに制限され、送信数も少ないため、実運用ではAuthentication > SMTP SettingsでCustom SMTPを設定してください。
+
 ## 7. スタッフ追加
 
 1. 公開URLを開きます。

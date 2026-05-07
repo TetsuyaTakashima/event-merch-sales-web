@@ -33,6 +33,8 @@ https://your-app.vercel.app/**
 http://localhost:5173/**
 ```
 
+Supabase標準のメール送信は検証用です。送信先制限や低い送信数制限があるため、実運用ではSupabaseのAuthentication > SMTP SettingsでCustom SMTPを設定してください。
+
 ## ローカル確認
 
 ```powershell
