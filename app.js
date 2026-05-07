@@ -999,6 +999,7 @@ function renderInventory() {
         </div>
       </div>
     </section>
+    ${renderProducts()}
   `;
 }
 
@@ -1341,6 +1342,9 @@ function renderProducts() {
 }
 
 function renderProductRow(row, canManage) {
+  const saleCount = salesCountForVariant(row.variant.id);
+  const deleteDisabled = !canManage || saleCount > 0;
+
   return `
     <tr data-product-row="${row.product.id}:${row.variant.id}">
       <td>
@@ -1373,7 +1377,11 @@ function renderProductRow(row, canManage) {
           <button class="button secondary" data-action="toggle-product" data-product-id="${row.product.id}" type="button" ${!canManage ? "disabled" : ""}>
             ${icon("refresh")}${row.product.status === "active" ? "停止" : "再開"}
           </button>
+          <button class="button danger" data-action="delete-product" data-product-id="${row.product.id}" data-variant-id="${row.variant.id}" type="button" ${deleteDisabled ? "disabled" : ""}>
+            ${icon("trash")}削除
+          </button>
         </div>
+        ${saleCount > 0 ? `<div class="muted">販売履歴があるため削除できません。停止を使用してください。</div>` : ""}
       </td>
     </tr>
   `;
@@ -1670,6 +1678,11 @@ function handleClick(event) {
 
   if (action === "save-product") {
     saveProduct(target.dataset.productId, target.dataset.variantId, target.closest("[data-product-row]"));
+    return;
+  }
+
+  if (action === "delete-product") {
+    deleteProduct(target.dataset.productId, target.dataset.variantId);
     return;
   }
 
@@ -2298,6 +2311,37 @@ function saveProduct(productId, variantId, row) {
   showToast("商品を更新しました");
 }
 
+function deleteProduct(productId, variantId) {
+  if (!can("manageProducts")) return;
+
+  const product = state.products.find((item) => item.id === productId);
+  const variant = product?.variants.find((item) => item.id === variantId);
+  if (!product || !variant) return;
+
+  const saleCount = salesCountForVariant(variantId);
+  if (saleCount > 0) {
+    showToast("販売履歴がある商品は削除できません。停止を使用してください");
+    return;
+  }
+
+  const inventoryCount = state.inventories.filter((inventory) => inventory.variantId === variantId).length;
+  const adjustmentCount = state.adjustments.filter((adjustment) => adjustment.variantId === variantId).length;
+  const message = `${product.name} / ${variant.name} を削除します。関連する在庫データ ${inventoryCount}件、調整履歴 ${adjustmentCount}件も削除されます。`;
+  if (!confirm(message)) return;
+
+  product.variants = product.variants.filter((item) => item.id !== variantId);
+  if (product.variants.length === 0) {
+    state.products = state.products.filter((item) => item.id !== productId);
+  }
+  state.inventories = state.inventories.filter((inventory) => inventory.variantId !== variantId);
+  state.adjustments = state.adjustments.filter((adjustment) => adjustment.variantId !== variantId);
+  ui.cart = ui.cart.filter((line) => line.variantId !== variantId);
+
+  saveState();
+  showToast("商品を削除しました");
+  render();
+}
+
 async function addUser(form) {
   if (!can("manageUsers")) return;
   const data = new FormData(form);
@@ -2711,6 +2755,10 @@ function isDuplicateSku(sku, currentVariantId) {
   return state.products.some((product) =>
     product.variants.some((variant) => variant.id !== currentVariantId && normalizeCode(variant.sku) === sku),
   );
+}
+
+function salesCountForVariant(variantId) {
+  return state.sales.filter((sale) => sale.items.some((item) => item.variantId === variantId)).length;
 }
 
 function activeAdminUsers() {
