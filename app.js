@@ -7,6 +7,7 @@ const isSupabaseMode = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 const supabase = isSupabaseMode ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const STORAGE_KEY = "event-merch-sales-web.v1";
+const UI_STATE_KEY = "event-merch-sales-web.ui.v1";
 const REMOTE_STATE_ID = "main";
 
 const CASH_METHOD = "現金";
@@ -101,7 +102,7 @@ let authProfile = null;
 let syncStatus = isSupabaseMode ? "未接続" : "ローカル保存";
 let saveQueue = Promise.resolve();
 
-let ui = {
+let ui = loadUiState({
   view: "dashboard",
   cart: [],
   paymentMethod: CASH_METHOD,
@@ -112,7 +113,7 @@ let ui = {
   historyQuery: "",
   reportEventId: state.selectedEventId,
   toast: "",
-};
+});
 
 function seedState() {
   const events = [
@@ -420,6 +421,99 @@ function serializeStateForRemote(source) {
   return rest;
 }
 
+function readUiSnapshot() {
+  try {
+    const raw = localStorage.getItem(UI_STATE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    console.warn("Failed to read saved UI state.", error);
+    return null;
+  }
+}
+
+function normalizeCartSnapshot(lines) {
+  if (!Array.isArray(lines)) return [];
+  return lines
+    .map((line) => ({
+      variantId: String(line?.variantId || ""),
+      quantity: Math.max(1, Math.floor(Number(line?.quantity || 1))),
+    }))
+    .filter((line) => line.variantId && Number.isFinite(line.quantity));
+}
+
+function sanitizeUiState(saved, defaults) {
+  const view = viewTitles[saved?.view] ? saved.view : defaults.view;
+  const reportEventId = state.events.some((event) => event.id === saved?.reportEventId) ? saved.reportEventId : state.selectedEventId;
+  const paymentMethod = paymentMethods.includes(saved?.paymentMethod) ? saved.paymentMethod : defaults.paymentMethod;
+
+  return {
+    ...defaults,
+    view,
+    cart: normalizeCartSnapshot(saved?.cart),
+    paymentMethod,
+    cashReceived: saved?.cashReceived === undefined || saved?.cashReceived === null ? defaults.cashReceived : String(saved.cashReceived),
+    authMode: defaults.authMode,
+    search: typeof saved?.search === "string" ? saved.search : defaults.search,
+    category: typeof saved?.category === "string" ? saved.category : defaults.category,
+    historyQuery: typeof saved?.historyQuery === "string" ? saved.historyQuery : defaults.historyQuery,
+    reportEventId,
+    toast: defaults.toast,
+  };
+}
+
+function loadUiState(defaults) {
+  const saved = readUiSnapshot();
+  if (saved?.selectedEventId && state.events.some((event) => event.id === saved.selectedEventId)) {
+    state.selectedEventId = saved.selectedEventId;
+  }
+  return sanitizeUiState(saved, defaults);
+}
+
+function restoreUiForCurrentState() {
+  const saved = readUiSnapshot();
+  if (saved?.selectedEventId && state.events.some((event) => event.id === saved.selectedEventId)) {
+    state.selectedEventId = saved.selectedEventId;
+  }
+
+  ui = sanitizeUiState({ ...ui, ...(saved || {}) }, ui);
+  pruneCartForActiveEvent();
+}
+
+function pruneCartForActiveEvent() {
+  const nextCart = [];
+  for (const line of normalizeCartSnapshot(ui.cart)) {
+    const row = catalogRowByVariant(line.variantId);
+    if (!row || row.inventory.current <= 0) continue;
+    nextCart.push({
+      variantId: line.variantId,
+      quantity: Math.min(line.quantity, row.inventory.current),
+    });
+  }
+  ui.cart = nextCart;
+}
+
+function saveUiState() {
+  try {
+    localStorage.setItem(
+      UI_STATE_KEY,
+      JSON.stringify({
+        selectedEventId: state.selectedEventId,
+        view: ui.view,
+        cart: normalizeCartSnapshot(ui.cart),
+        paymentMethod: ui.paymentMethod,
+        cashReceived: ui.cashReceived,
+        search: ui.search,
+        category: ui.category,
+        historyQuery: ui.historyQuery,
+        reportEventId: ui.reportEventId,
+        savedAt: new Date().toISOString(),
+      }),
+    );
+  } catch (error) {
+    console.warn("Failed to save UI state.", error);
+  }
+}
+
 function render() {
   const app = document.getElementById("app");
   if (!appReady) {
@@ -469,6 +563,7 @@ function render() {
       }
     }
   }
+  saveUiState();
 }
 
 function renderLoading() {
@@ -2061,6 +2156,9 @@ async function signOut() {
   state = seedState();
   appReady = true;
   ui.authMode = "sign-in";
+  ui.cart = [];
+  ui.cashReceived = "";
+  localStorage.removeItem(UI_STATE_KEY);
   render();
 }
 
@@ -2096,6 +2194,7 @@ async function loadRemoteData() {
     currentUserId: profile.id,
   });
   state.currentUserId = profile.id;
+  restoreUiForCurrentState();
   ui.reportEventId = state.events.some((event) => event.id === ui.reportEventId) ? ui.reportEventId : state.selectedEventId;
   syncStatus = "共有中";
 }
@@ -3404,11 +3503,14 @@ function icon(name) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  registerServiceWorker();
+  bindLifecyclePersistence();
   initApp();
 });
 
 async function initApp() {
   if (!isSupabaseMode) {
+    restoreUiForCurrentState();
     render();
     return;
   }
@@ -3458,4 +3560,18 @@ async function initApp() {
     showToast("Supabaseの初期化に失敗しました");
     render();
   }
+}
+
+function bindLifecyclePersistence() {
+  window.addEventListener("pagehide", saveUiState);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveUiState();
+  });
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || window.location.protocol === "file:") return;
+  navigator.serviceWorker.register("/sw.js").catch((error) => {
+    console.warn("Service worker registration failed.", error);
+  });
 }
