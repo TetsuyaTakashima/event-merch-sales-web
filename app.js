@@ -1090,7 +1090,7 @@ function renderHistory() {
 function renderSalesTable(sales, withActions) {
   return `
     <div class="table-wrap">
-      <table>
+      <table class="mobile-card-table sales-table">
         <thead>
           <tr>
             <th>日時</th>
@@ -1107,15 +1107,15 @@ function renderSalesTable(sales, withActions) {
             .map(
               (sale) => `
                 <tr>
-                  <td>${formatDateTime(sale.createdAt)}</td>
-                  <td>${escapeHtml(sale.items.map((item) => `${item.name}/${item.variantName} x${item.quantity}`).join("、"))}</td>
-                  <td>${escapeHtml(userById(sale.userId)?.name ?? "不明")}</td>
-                  <td>${renderPaymentCell(sale)}</td>
-                  <td class="numeric">${yen(sale.total)}</td>
-                  <td><span class="status ${sale.status}">${sale.status === "completed" ? "完了" : "取消"}</span></td>
+                  <td data-label="日時">${formatDateTime(sale.createdAt)}</td>
+                  <td data-label="商品">${escapeHtml(sale.items.map((item) => `${item.name}/${item.variantName} x${item.quantity}`).join("、"))}</td>
+                  <td data-label="担当">${escapeHtml(userById(sale.userId)?.name ?? "不明")}</td>
+                  <td data-label="決済">${renderPaymentCell(sale)}</td>
+                  <td class="numeric" data-label="金額">${yen(sale.total)}</td>
+                  <td data-label="状態"><span class="status ${sale.status}">${sale.status === "completed" ? "完了" : "取消"}</span></td>
                   ${
                     withActions
-                      ? `<td>
+                      ? `<td data-label="操作">
                           <button class="button secondary" data-action="cancel-sale" data-sale-id="${sale.id}" type="button" ${sale.status !== "completed" || !canCancelSale(sale) ? "disabled" : ""}>
                             ${icon("x")}取消
                           </button>
@@ -1165,7 +1165,7 @@ function renderInventory() {
       </div>
       <div class="panel-body">
         <div class="table-wrap">
-          <table>
+          <table class="mobile-card-table inventory-table">
             <thead>
               <tr>
                 <th>商品</th>
@@ -1195,23 +1195,23 @@ function renderInventoryRow(row) {
 
   return `
     <tr>
-      <td>
+      <td data-label="商品">
         <strong>${escapeHtml(row.product.name)} / ${escapeHtml(row.variant.name)}</strong>
         <div class="muted">${escapeHtml(row.product.category)}</div>
       </td>
-      <td>${escapeHtml(row.variant.sku)}</td>
-      <td class="numeric">${row.initial}</td>
-      <td class="numeric"><span class="status ${row.current <= row.threshold ? "low" : "active"}">${row.current}</span></td>
-      <td class="numeric">${row.threshold}</td>
-      <td>
+      <td data-label="SKU">${escapeHtml(row.variant.sku)}</td>
+      <td class="numeric" data-label="初期">${row.initial}</td>
+      <td class="numeric" data-label="現在"><span class="status ${row.current <= row.threshold ? "low" : "active"}">${row.current}</span></td>
+      <td class="numeric" data-label="しきい値">${row.threshold}</td>
+      <td data-label="実在庫">
         <form class="actual-form" data-action="save-actual">
           <input class="input" type="number" min="0" name="actual" value="${row.actual ?? ""}" ${!canAdjust ? "disabled" : ""}>
           <input type="hidden" name="variantId" value="${row.variant.id}">
           <button class="icon-button" type="submit" title="実在庫を保存" aria-label="実在庫を保存" ${!canAdjust ? "disabled" : ""}>${icon("save")}</button>
         </form>
       </td>
-      <td class="numeric">${diff === "" ? "-" : diff > 0 ? `+${diff}` : diff}</td>
-      <td>
+      <td class="numeric" data-label="差異">${diff === "" ? "-" : diff > 0 ? `+${diff}` : diff}</td>
+      <td data-label="調整">
         <form class="inline-form" data-action="adjust-stock">
           <input class="input" type="number" name="amount" placeholder="+/-" ${!canAdjust ? "disabled" : ""}>
           <input class="input" type="text" name="reason" placeholder="理由" ${!canAdjust ? "disabled" : ""}>
@@ -1292,7 +1292,7 @@ function renderProductReportTable(rows) {
   if (rows.length === 0) return `<div class="empty">集計対象の販売がありません</div>`;
   return `
     <div class="table-wrap">
-      <table>
+      <table class="mobile-card-table report-product-table">
         <thead>
           <tr>
             <th>商品</th>
@@ -1306,10 +1306,10 @@ function renderProductReportTable(rows) {
             .map(
               (row) => `
                 <tr>
-                  <td>${escapeHtml(row.name)}</td>
-                  <td>${escapeHtml(row.sku)}</td>
-                  <td class="numeric">${row.quantity}</td>
-                  <td class="numeric">${yen(row.total)}</td>
+                  <td data-label="商品">${escapeHtml(row.name)}</td>
+                  <td data-label="SKU">${escapeHtml(row.sku)}</td>
+                  <td class="numeric" data-label="販売数">${row.quantity}</td>
+                  <td class="numeric" data-label="売上">${yen(row.total)}</td>
                 </tr>
               `,
             )
@@ -1324,7 +1324,7 @@ function renderHourlyTable(rows) {
   if (rows.length === 0) return `<div class="empty">集計対象の販売がありません</div>`;
   return `
     <div class="table-wrap">
-      <table>
+      <table class="mobile-card-table report-hourly-table">
         <thead>
           <tr>
             <th>時間帯</th>
@@ -1338,10 +1338,10 @@ function renderHourlyTable(rows) {
             .map(
               (row) => `
                 <tr>
-                  <td>${row.hour}:00</td>
-                  <td class="numeric">${row.salesCount}</td>
-                  <td class="numeric">${row.units}</td>
-                  <td class="numeric">${yen(row.total)}</td>
+                  <td data-label="時間帯">${row.hour}:00</td>
+                  <td class="numeric" data-label="販売件数">${row.salesCount}</td>
+                  <td class="numeric" data-label="販売点数">${row.units}</td>
+                  <td class="numeric" data-label="売上">${yen(row.total)}</td>
                 </tr>
               `,
             )
@@ -1365,7 +1365,7 @@ function renderEvents() {
       </div>
       <div class="panel-body">
         <div class="table-wrap">
-          <table class="events-table">
+          <table class="mobile-card-table events-table">
             <thead>
               <tr>
                 <th>イベント</th>
@@ -1415,20 +1415,20 @@ function renderEventRow(event, canManage) {
 
   return `
     <tr data-event-row="${event.id}">
-      <td>
+      <td data-label="イベント">
         <input class="input table-input event-name-input" name="eventName" value="${escapeAttribute(event.name)}" ${!canManage ? "disabled" : ""}>
         <textarea class="textarea table-textarea" name="eventMemo" placeholder="メモ" ${!canManage ? "disabled" : ""}>${escapeHtml(event.memo || "")}</textarea>
         ${event.id === state.selectedEventId ? `<div class="muted">現在の対象イベント</div>` : ""}
       </td>
-      <td>
+      <td data-label="開催日">
         <input class="input table-input" name="eventDate" type="date" value="${escapeAttribute(event.date)}" ${!canManage ? "disabled" : ""}>
         <div class="muted">${formatDate(event.date)}</div>
       </td>
-      <td>
+      <td data-label="会場">
         <input class="input table-input" name="eventVenue" value="${escapeAttribute(event.venue)}" ${!canManage ? "disabled" : ""}>
       </td>
-      <td><span class="status ${event.status === "closed" ? "closed" : event.status === "open" ? "open" : "info"}">${eventStatusLabel(event.status)}</span></td>
-      <td>
+      <td data-label="状態"><span class="status ${event.status === "closed" ? "closed" : event.status === "open" ? "open" : "info"}">${eventStatusLabel(event.status)}</span></td>
+      <td data-label="操作">
         <div class="row-actions">
           <button class="button secondary" data-action="activate-event" data-event-id="${event.id}" type="button">${icon("check")}選択</button>
           <button class="button secondary" data-action="save-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("save")}保存</button>
@@ -1679,7 +1679,7 @@ function renderUsers() {
       </div>
       <div class="panel-body">
         <div class="table-wrap">
-          <table>
+          <table class="mobile-card-table users-table ${isSupabaseMode ? "is-supabase" : "is-local"}">
             <thead>
               <tr>
                 <th>名前</th>
@@ -1716,37 +1716,37 @@ function renderUserRow(user, canManage) {
 
   return `
     <tr data-user-row="${user.id}">
-      <td>
+      <td data-label="名前">
         <input class="input table-input" name="userName" value="${escapeAttribute(user.name)}" ${saveDisabled ? "disabled" : ""}>
         ${user.id === state.currentUserId ? `<div class="muted">現在の操作ユーザー</div>` : ""}
       </td>
       ${
         isSupabaseMode
           ? `
-            <td>
+            <td data-label="ログインID">
               <input class="input table-input" name="userEmail" type="email" value="${escapeAttribute(user.email || "")}" placeholder="mail@example.com" ${saveDisabled ? "disabled" : ""}>
               <div class="muted">メールアドレスでログイン</div>
             </td>
-            <td>
+            <td data-label="仮パスワード">
               <input class="input table-input" name="userPassword" type="password" autocomplete="new-password" placeholder="変更時のみ入力" ${saveDisabled ? "disabled" : ""}>
               <div class="muted">6文字以上</div>
             </td>
           `
           : ""
       }
-      <td>
+      <td data-label="権限">
         <select class="select table-input" name="userRole" ${saveDisabled ? "disabled" : ""}>
           ${Object.entries(roles).map(([key, label]) => `<option value="${key}" ${user.role === key ? "selected" : ""}>${label}</option>`).join("")}
         </select>
       </td>
-      <td>
+      <td data-label="状態">
         <select class="select table-input" name="userActive" ${saveDisabled ? "disabled" : ""}>
           <option value="true" ${user.active ? "selected" : ""}>有効</option>
           <option value="false" ${!user.active ? "selected" : ""}>無効</option>
         </select>
         <div><span class="status ${user.active ? "active" : "inactive"}">${user.active ? "有効" : "無効"}</span></div>
       </td>
-      <td>
+      <td data-label="操作">
         <div class="row-actions">
           <button class="button secondary" data-action="save-user" data-user-id="${user.id}" type="button" ${saveDisabled ? "disabled" : ""}>${icon("save")}保存</button>
           <button class="button danger" data-action="delete-user" data-user-id="${user.id}" type="button" ${deleteDisabled ? "disabled" : ""}>${icon("trash")}削除</button>

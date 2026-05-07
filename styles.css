@@ -1005,12 +1005,52 @@ th.numeric {
     padding: 16px;
   }
 
-  .metric-grid,
   .form-grid,
   .form-grid.three,
   .form-grid.two,
   .form-grid.user-create-grid {
     grid-template-columns: 1fr;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .metric-card {
+    min-height: 84px;
+    padding: 10px;
+    gap: 6px;
+  }
+
+  .metric-card span,
+  .metric-card small {
+    font-size: 11px;
+    line-height: 1.3;
+  }
+
+  .metric-card strong {
+    font-size: 20px;
+  }
+
+  .panel-header {
+    min-height: auto;
+    padding: 12px;
+    align-items: flex-start;
+  }
+
+  .panel-header h2 {
+    font-size: 15px;
+  }
+
+  .panel-body {
+    padding: 12px;
+  }
+
+  .list-row {
+    min-height: auto;
+    align-items: flex-start;
+    padding: 9px 10px;
   }
 
   .filters {
@@ -1044,6 +1084,78 @@ th.numeric {
   .menu-actions > .button,
   .menu-actions > .import-button {
     width: 100%;
+  }
+
+  .mobile-card-table {
+    min-width: 0;
+  }
+
+  .mobile-card-table thead {
+    display: none;
+  }
+
+  .mobile-card-table,
+  .mobile-card-table tbody,
+  .mobile-card-table tr,
+  .mobile-card-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .mobile-card-table tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px;
+    margin-bottom: 12px;
+    background: #ffffff;
+  }
+
+  .mobile-card-table td {
+    border-bottom: 0;
+    padding: 7px 0;
+    text-align: left;
+  }
+
+  .mobile-card-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .mobile-card-table td.numeric {
+    text-align: left;
+  }
+
+  .mobile-card-table .table-input,
+  .mobile-card-table .table-textarea,
+  .mobile-card-table .input,
+  .mobile-card-table .select,
+  .mobile-card-table .textarea {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .mobile-card-table .table-textarea {
+    min-height: 64px;
+  }
+
+  .mobile-card-table .row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .mobile-card-table .row-actions .button {
+    min-height: 38px;
+    padding: 0 8px;
+  }
+
+  .sales-table td[data-label="商品"],
+  .report-product-table td[data-label="商品"] {
+    overflow-wrap: anywhere;
   }
 
   .product-grid {
@@ -1247,5 +1359,9 @@ th.numeric {
   .inline-form,
   .actual-form {
     grid-template-columns: 1fr;
+  }
+
+  .mobile-card-table .actual-form {
+    grid-template-columns: minmax(0, 1fr) 40px;
   }
 }
