@@ -1006,12 +1006,26 @@ th.numeric {
   }
 
   .metric-grid,
-  .filters,
   .form-grid,
   .form-grid.three,
   .form-grid.two,
   .form-grid.user-create-grid {
     grid-template-columns: 1fr;
+  }
+
+  .filters {
+    grid-template-columns: minmax(0, 1fr) 118px;
+    gap: 8px;
+  }
+
+  .filters .input,
+  .filters .select {
+    min-height: 36px;
+    padding: 6px 8px;
+  }
+
+  .filters .field label {
+    font-size: 11px;
   }
 
   .menu-grid,
@@ -1033,22 +1047,177 @@ th.numeric {
   }
 
   .product-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .product-card {
     min-height: auto;
+    padding: 9px;
+    gap: 7px;
+  }
+
+  .product-top {
+    gap: 7px;
+  }
+
+  .swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+  }
+
+  .product-name {
+    font-size: 12px;
+    line-height: 1.25;
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .product-meta {
+    gap: 4px;
+    font-size: 10px;
+    line-height: 1.25;
+  }
+
+  .product-card > .product-meta span:last-child {
+    display: none;
   }
 
   .product-card footer {
-    display: grid;
-    grid-template-columns: 1fr;
-    align-items: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .price {
+    font-size: 14px;
   }
 
   .product-card footer .button {
+    width: auto;
+    min-width: 58px;
+    min-height: 34px;
+    padding: 0 8px;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .product-card footer .button .icon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .products-table {
+    min-width: 0;
+  }
+
+  .products-table thead {
+    display: none;
+  }
+
+  .products-table,
+  .products-table tbody,
+  .products-table tr,
+  .products-table td {
+    display: block;
     width: 100%;
-    min-height: 48px;
+  }
+
+  .products-table tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px;
+    margin-bottom: 12px;
+    background: #fff;
+  }
+
+  .products-table td {
+    border-bottom: 0;
+    padding: 7px 0;
+  }
+
+  .products-table td::before {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .products-table td:nth-child(1)::before {
+    content: "商品";
+  }
+
+  .products-table td:nth-child(2)::before {
+    content: "カテゴリ";
+  }
+
+  .products-table td:nth-child(3)::before {
+    content: "バリエーション";
+  }
+
+  .products-table td:nth-child(4)::before {
+    content: "SKU";
+  }
+
+  .products-table td:nth-child(5)::before {
+    content: "価格";
+  }
+
+  .products-table td:nth-child(6)::before {
+    content: "表示色";
+  }
+
+  .products-table td:nth-child(7)::before {
+    content: "現在庫";
+  }
+
+  .products-table td:nth-child(8)::before {
+    content: "状態";
+  }
+
+  .products-table td:nth-child(9)::before {
+    content: "操作";
+  }
+
+  .products-table td[colspan]::before {
+    content: none;
+  }
+
+  .products-table td.numeric {
+    text-align: left;
+  }
+
+  .products-table .table-input,
+  .products-table .product-code-input,
+  .products-table .sku-input,
+  .products-table .price-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .products-table .product-code-input,
+  .products-table .sku-input {
+    margin-top: 7px;
+  }
+
+  .products-table .color-picker {
+    width: 56px;
+  }
+
+  .products-table .row-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .products-table .row-actions .button {
+    min-height: 38px;
+    padding: 0 8px;
   }
 
   .segmented {
