@@ -135,6 +135,7 @@ function seedState() {
       code: "TSHIRT",
       category: "アパレル",
       status: "active",
+      eventIds: events.map((event) => event.id),
       variants: [
         { id: "var-shirt-m", name: "M", sku: "TSHIRT-M", price: 3500, color: "#0f766e" },
         { id: "var-shirt-l", name: "L", sku: "TSHIRT-L", price: 3500, color: "#2563eb" },
@@ -146,6 +147,7 @@ function seedState() {
       code: "TOWEL",
       category: "雑貨",
       status: "active",
+      eventIds: events.map((event) => event.id),
       variants: [{ id: "var-towel", name: "通常", sku: "TOWEL-STD", price: 2200, color: "#dc2626" }],
     },
     {
@@ -154,6 +156,7 @@ function seedState() {
       code: "ACRYLIC",
       category: "コレクション",
       status: "active",
+      eventIds: events.map((event) => event.id),
       variants: [
         { id: "var-acrylic-a", name: "Type A", sku: "ACRYLIC-A", price: 1800, color: "#a21caf" },
         { id: "var-acrylic-b", name: "Type B", sku: "ACRYLIC-B", price: 1800, color: "#ea580c" },
@@ -165,6 +168,7 @@ function seedState() {
       code: "STICKER",
       category: "雑貨",
       status: "active",
+      eventIds: events.map((event) => event.id),
       variants: [{ id: "var-sticker", name: "5枚セット", sku: "STICKER-5", price: 900, color: "#f59e0b" }],
     },
   ];
@@ -352,8 +356,15 @@ function normalizeState(saved) {
     };
   });
 
+  next.products = next.products.map((product) => ({
+    ...product,
+    eventIds: normalizeProductEventIds(product, next.events, next.inventories),
+    variants: Array.isArray(product.variants) ? product.variants : [],
+  }));
+
+  const eventIds = next.events.map((event) => event.id);
   for (const event of next.events) {
-    for (const product of next.products) {
+    for (const product of next.products.filter((item) => productEventIds(item, eventIds).includes(event.id))) {
       for (const variant of product.variants) {
         if (!next.inventories.some((inventory) => inventory.eventId === event.id && inventory.variantId === variant.id)) {
           next.inventories.push({
@@ -707,13 +718,14 @@ function renderDashboard() {
 
 function renderPos() {
   const event = getActiveEvent();
-  const categories = ["すべて", ...new Set(state.products.map((product) => product.category))];
+  const availableRows = catalogRows(false, event.id);
+  const categories = ["すべて", ...new Set(availableRows.map((row) => row.product.category))];
+  const selectedCategory = categories.includes(ui.category) ? ui.category : "すべて";
   const total = cartTotal();
   const canConfirm = canConfirmCurrentSale(event);
   const blockingNotice = saleBlockingNotice(event, total);
-  const rows = catalogRows()
-    .filter((row) => row.product.status === "active")
-    .filter((row) => ui.category === "すべて" || row.product.category === ui.category)
+  const rows = availableRows
+    .filter((row) => selectedCategory === "すべて" || row.product.category === selectedCategory)
     .filter((row) => {
       const text = `${row.product.name} ${row.product.code} ${row.product.category} ${row.variant.name} ${row.variant.sku}`.toLowerCase();
       return text.includes(ui.search.trim().toLowerCase());
@@ -730,7 +742,7 @@ function renderPos() {
           <div class="field">
             <label for="category-filter">カテゴリ</label>
             <select id="category-filter" class="select" data-action="category-filter">
-              ${categories.map((category) => `<option value="${escapeAttribute(category)}" ${ui.category === category ? "selected" : ""}>${escapeHtml(category)}</option>`).join("")}
+              ${categories.map((category) => `<option value="${escapeAttribute(category)}" ${selectedCategory === category ? "selected" : ""}>${escapeHtml(category)}</option>`).join("")}
             </select>
           </div>
         </div>
@@ -1258,15 +1270,16 @@ function renderEventRow(event, canManage) {
 
 function renderProducts() {
   const canManage = can("manageProducts");
-  const rows = catalogRows(true);
-  const categories = [...new Set(state.products.map((product) => product.category))];
+  const event = getActiveEvent();
+  const rows = catalogRows(true, event.id);
+  const categories = [...new Set(productsForEvent(event.id).map((product) => product.category))];
 
   return `
     <section class="panel">
       <div class="panel-header">
         <div>
-          <h2>商品一覧</h2>
-          <p>商品とバリエーションの販売状態を管理</p>
+          <h2>イベント商品一覧</h2>
+          <p>${escapeHtml(event.name)}の商品とバリエーションを管理</p>
         </div>
       </div>
       <div class="panel-body">
@@ -1286,7 +1299,11 @@ function renderProducts() {
               </tr>
             </thead>
             <tbody>
-              ${rows.map((row) => renderProductRow(row, canManage)).join("")}
+              ${
+                rows.length
+                  ? rows.map((row) => renderProductRow(row, canManage, event.id)).join("")
+                  : `<tr><td colspan="9"><div class="empty">このイベントの商品はまだありません</div></td></tr>`
+              }
             </tbody>
           </table>
         </div>
@@ -1295,8 +1312,8 @@ function renderProducts() {
     <section class="panel">
       <div class="panel-header">
         <div>
-          <h2>商品追加</h2>
-          <p>まずは単一バリエーションの商品として追加</p>
+          <h2>イベント商品追加</h2>
+          <p>${escapeHtml(event.name)}専用の商品として追加</p>
         </div>
       </div>
       <div class="panel-body">
@@ -1341,9 +1358,10 @@ function renderProducts() {
   `;
 }
 
-function renderProductRow(row, canManage) {
-  const saleCount = salesCountForVariant(row.variant.id);
+function renderProductRow(row, canManage, eventId) {
+  const saleCount = salesCountForProductEvent(row.product, eventId);
   const deleteDisabled = !canManage || saleCount > 0;
+  const status = productStatusForEvent(row.product, eventId);
 
   return `
     <tr data-product-row="${row.product.id}:${row.variant.id}">
@@ -1368,14 +1386,14 @@ function renderProductRow(row, canManage) {
         <input class="input color-picker" name="variantColor" type="color" value="${escapeAttribute(row.variant.color)}" ${!canManage ? "disabled" : ""}>
       </td>
       <td class="numeric">${row.inventory.current}</td>
-      <td><span class="status ${row.product.status}">${row.product.status === "active" ? "販売中" : "停止"}</span></td>
+      <td><span class="status ${status}">${status === "active" ? "販売中" : "停止"}</span></td>
       <td>
         <div class="row-actions">
           <button class="button secondary" data-action="save-product" data-product-id="${row.product.id}" data-variant-id="${row.variant.id}" type="button" ${!canManage ? "disabled" : ""}>
             ${icon("save")}保存
           </button>
           <button class="button secondary" data-action="toggle-product" data-product-id="${row.product.id}" type="button" ${!canManage ? "disabled" : ""}>
-            ${icon("refresh")}${row.product.status === "active" ? "停止" : "再開"}
+            ${icon("refresh")}${status === "active" ? "停止" : "再開"}
           </button>
           <button class="button danger" data-action="delete-product" data-product-id="${row.product.id}" data-variant-id="${row.variant.id}" type="button" ${deleteDisabled ? "disabled" : ""}>
             ${icon("trash")}削除
@@ -1651,6 +1669,9 @@ function handleClick(event) {
   if (action === "activate-event") {
     state.selectedEventId = target.dataset.eventId;
     ui.reportEventId = target.dataset.eventId;
+    ui.category = "すべて";
+    ui.cart = [];
+    ui.cashReceived = "";
     saveState();
     showToast("対象イベントを変更しました");
     return;
@@ -1728,6 +1749,7 @@ function handleChange(event) {
   if (action === "select-event") {
     state.selectedEventId = target.value;
     ui.reportEventId = target.value;
+    ui.category = "すべて";
     ui.cart = [];
     ui.cashReceived = "";
     saveState();
@@ -2131,11 +2153,11 @@ function addEvent(form) {
   };
 
   state.events.push(event);
-  for (const row of catalogRows(true)) {
-    ensureInventory(event.id, row.variant.id, 0, row.inventory.threshold);
-  }
   state.selectedEventId = event.id;
   ui.reportEventId = event.id;
+  ui.category = "すべて";
+  ui.cart = [];
+  ui.cashReceived = "";
   saveState();
   form.reset();
   showToast("イベントを追加しました");
@@ -2178,9 +2200,17 @@ function deleteEvent(eventId) {
 
   const relatedSalesCount = state.sales.filter((sale) => sale.eventId === event.id).length;
   const relatedInventoryCount = state.inventories.filter((inventory) => inventory.eventId === event.id).length;
-  const message = `${event.name} を削除します。関連する販売履歴 ${relatedSalesCount}件、在庫データ ${relatedInventoryCount}件も削除されます。`;
+  const relatedProductCount = state.products.filter((product) => productEventIds(product).includes(event.id)).length;
+  const message = `${event.name} を削除します。関連する販売履歴 ${relatedSalesCount}件、在庫データ ${relatedInventoryCount}件、イベント商品 ${relatedProductCount}件も削除されます。`;
   if (!confirm(message)) return;
 
+  state.products = state.products
+    .map((product) => ({
+      ...product,
+      eventIds: productEventIds(product).filter((id) => id !== event.id),
+      eventStatuses: Object.fromEntries(Object.entries(product.eventStatuses || {}).filter(([id]) => id !== event.id)),
+    }))
+    .filter((product) => product.eventIds.length > 0);
   state.events = state.events.filter((item) => item.id !== event.id);
   state.sales = state.sales.filter((sale) => sale.eventId !== event.id);
   state.inventories = state.inventories.filter((inventory) => inventory.eventId !== event.id);
@@ -2189,6 +2219,7 @@ function deleteEvent(eventId) {
   if (state.selectedEventId === event.id) {
     state.selectedEventId = state.events[0].id;
     ui.reportEventId = state.selectedEventId;
+    ui.category = "すべて";
     ui.cart = [];
     ui.cashReceived = "";
   } else if (ui.reportEventId === event.id) {
@@ -2247,6 +2278,8 @@ function addProduct(form) {
     code,
     category,
     status: "active",
+    eventIds: [state.selectedEventId],
+    eventStatuses: { [state.selectedEventId]: "active" },
     variants: [
       {
         id: variantId,
@@ -2259,10 +2292,7 @@ function addProduct(form) {
   };
 
   state.products.push(product);
-  for (const event of state.events) {
-    const count = event.id === state.selectedEventId ? stock : 0;
-    ensureInventory(event.id, variantId, count, threshold);
-  }
+  ensureInventory(state.selectedEventId, variantId, stock, threshold);
   saveState();
   form.reset();
   showToast("商品を追加しました");
@@ -2318,27 +2348,32 @@ function deleteProduct(productId, variantId) {
   const variant = product?.variants.find((item) => item.id === variantId);
   if (!product || !variant) return;
 
-  const saleCount = salesCountForVariant(variantId);
+  const event = getActiveEvent();
+  const saleCount = salesCountForProductEvent(product, event.id);
   if (saleCount > 0) {
-    showToast("販売履歴がある商品は削除できません。停止を使用してください");
+    showToast("このイベントで販売履歴がある商品は削除できません。停止を使用してください");
     return;
   }
 
-  const inventoryCount = state.inventories.filter((inventory) => inventory.variantId === variantId).length;
-  const adjustmentCount = state.adjustments.filter((adjustment) => adjustment.variantId === variantId).length;
-  const message = `${product.name} / ${variant.name} を削除します。関連する在庫データ ${inventoryCount}件、調整履歴 ${adjustmentCount}件も削除されます。`;
+  const variantIds = product.variants.map((item) => item.id);
+  const inventoryCount = state.inventories.filter((inventory) => inventory.eventId === event.id && variantIds.includes(inventory.variantId)).length;
+  const adjustmentCount = state.adjustments.filter((adjustment) => adjustment.eventId === event.id && variantIds.includes(adjustment.variantId)).length;
+  const message = `${event.name} から ${product.name} を削除します。関連する在庫データ ${inventoryCount}件、調整履歴 ${adjustmentCount}件も削除されます。`;
   if (!confirm(message)) return;
 
-  product.variants = product.variants.filter((item) => item.id !== variantId);
-  if (product.variants.length === 0) {
+  const remainingEventIds = productEventIds(product).filter((id) => id !== event.id);
+  if (remainingEventIds.length === 0) {
     state.products = state.products.filter((item) => item.id !== productId);
+  } else {
+    product.eventIds = remainingEventIds;
+    product.eventStatuses = Object.fromEntries(Object.entries(product.eventStatuses || {}).filter(([id]) => id !== event.id));
   }
-  state.inventories = state.inventories.filter((inventory) => inventory.variantId !== variantId);
-  state.adjustments = state.adjustments.filter((adjustment) => adjustment.variantId !== variantId);
-  ui.cart = ui.cart.filter((line) => line.variantId !== variantId);
+  state.inventories = state.inventories.filter((inventory) => inventory.eventId !== event.id || !variantIds.includes(inventory.variantId));
+  state.adjustments = state.adjustments.filter((adjustment) => adjustment.eventId !== event.id || !variantIds.includes(adjustment.variantId));
+  ui.cart = ui.cart.filter((line) => !variantIds.includes(line.variantId));
 
   saveState();
-  showToast("商品を削除しました");
+  showToast("イベント商品を削除しました");
   render();
 }
 
@@ -2667,9 +2702,15 @@ function toggleProduct(productId) {
   if (!can("manageProducts")) return;
   const product = state.products.find((item) => item.id === productId);
   if (!product) return;
-  product.status = product.status === "active" ? "inactive" : "active";
+  const event = getActiveEvent();
+  const currentStatus = productStatusForEvent(product, event.id);
+  product.eventStatuses = {
+    ...(product.eventStatuses || {}),
+    [event.id]: currentStatus === "active" ? "inactive" : "active",
+  };
   saveState();
   showToast("商品状態を更新しました");
+  render();
 }
 
 function exportCsv(type) {
@@ -2751,14 +2792,56 @@ function normalizeCode(value) {
   return String(value).trim().toUpperCase();
 }
 
-function isDuplicateSku(sku, currentVariantId) {
-  return state.products.some((product) =>
+function productEventIds(product, fallbackEventIds = state.events.map((event) => event.id)) {
+  const validFallbackIds = Array.isArray(fallbackEventIds) ? fallbackEventIds : [];
+  if (Array.isArray(product.eventIds)) {
+    return [...new Set(product.eventIds.filter((id) => validFallbackIds.length === 0 || validFallbackIds.includes(id)))];
+  }
+  if (product.eventId && (validFallbackIds.length === 0 || validFallbackIds.includes(product.eventId))) {
+    return [product.eventId];
+  }
+  return validFallbackIds;
+}
+
+function normalizeProductEventIds(product, events, inventories) {
+  const eventIds = events.map((event) => event.id);
+  const explicitIds = productEventIds(product, eventIds);
+  if (Array.isArray(product.eventIds) || product.eventId) {
+    return explicitIds;
+  }
+
+  const variantIds = new Set(Array.isArray(product.variants) ? product.variants.map((variant) => variant.id) : []);
+  const inventoryEventIds = inventories
+    .filter((inventory) => variantIds.has(inventory.variantId) && eventIds.includes(inventory.eventId))
+    .map((inventory) => inventory.eventId);
+  return [...new Set(inventoryEventIds.length > 0 ? inventoryEventIds : eventIds)];
+}
+
+function productBelongsToEvent(product, eventId) {
+  return productEventIds(product).includes(eventId);
+}
+
+function productStatusForEvent(product, eventId) {
+  return product.eventStatuses?.[eventId] || product.status || "active";
+}
+
+function productsForEvent(eventId, includeInactive = true) {
+  return state.products.filter((product) => productBelongsToEvent(product, eventId) && (includeInactive || productStatusForEvent(product, eventId) === "active"));
+}
+
+function isDuplicateSku(sku, currentVariantId, eventId = getActiveEvent().id) {
+  return productsForEvent(eventId).some((product) =>
     product.variants.some((variant) => variant.id !== currentVariantId && normalizeCode(variant.sku) === sku),
   );
 }
 
-function salesCountForVariant(variantId) {
-  return state.sales.filter((sale) => sale.items.some((item) => item.variantId === variantId)).length;
+function salesCountForVariant(variantId, eventId = null) {
+  return state.sales.filter((sale) => (!eventId || sale.eventId === eventId) && sale.items.some((item) => item.variantId === variantId)).length;
+}
+
+function salesCountForProductEvent(product, eventId) {
+  const variantIds = new Set(product.variants.map((variant) => variant.id));
+  return state.sales.filter((sale) => sale.eventId === eventId && sale.items.some((item) => variantIds.has(item.variantId))).length;
 }
 
 function activeAdminUsers() {
@@ -2791,25 +2874,23 @@ function cancelledSales(eventId) {
   return state.sales.filter((sale) => sale.eventId === eventId && sale.status === "cancelled");
 }
 
-function catalogRows(includeInactive = false) {
-  const event = getActiveEvent();
-  return state.products
-    .filter((product) => includeInactive || product.status === "active")
+function catalogRows(includeInactive = false, eventId = getActiveEvent().id) {
+  return productsForEvent(eventId, includeInactive)
     .flatMap((product) =>
       product.variants.map((variant) => ({
         product,
         variant,
-        inventory: ensureInventory(event.id, variant.id, 0, 5),
+        inventory: ensureInventory(eventId, variant.id, 0, 5),
       })),
     );
 }
 
-function catalogRowByVariant(variantId) {
-  return catalogRows(true).find((row) => row.variant.id === variantId);
+function catalogRowByVariant(variantId, eventId = getActiveEvent().id) {
+  return catalogRows(true, eventId).find((row) => row.variant.id === variantId);
 }
 
 function inventoryRows(eventId) {
-  return state.products.flatMap((product) =>
+  return productsForEvent(eventId).flatMap((product) =>
     product.variants.map((variant) => ({
       product,
       variant,
@@ -2864,7 +2945,7 @@ function productReportRows(eventId) {
   const map = new Map();
   for (const sale of completedSales(eventId)) {
     for (const item of sale.items) {
-      const row = catalogRowByVariant(item.variantId);
+      const row = catalogRowByVariant(item.variantId, eventId);
       const key = item.variantId;
       const existing = map.get(key) || {
         name: `${item.name} / ${item.variantName}`,
