@@ -1273,6 +1273,7 @@ function renderProducts() {
   const event = getActiveEvent();
   const rows = catalogRows(true, event.id);
   const categories = [...new Set(productsForEvent(event.id).map((product) => product.category))];
+  const linkCandidates = state.products.filter((product) => !productBelongsToEvent(product, event.id));
 
   return `
     <section class="panel">
@@ -1307,6 +1308,46 @@ function renderProducts() {
             </tbody>
           </table>
         </div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>登録済み商品を追加</h2>
+          <p>${escapeHtml(event.name)}に既存の商品を紐づけ</p>
+        </div>
+      </div>
+      <div class="panel-body">
+        ${
+          linkCandidates.length
+            ? `<form class="form-grid" data-action="link-product-event">
+                <div class="field">
+                  <label for="link-product-id">商品</label>
+                  <select id="link-product-id" class="select" name="productId" required ${!canManage ? "disabled" : ""}>
+                    ${linkCandidates
+                      .map((product) => {
+                        const linkedEvents =
+                          productEventIds(product)
+                            .map((eventId) => state.events.find((item) => item.id === eventId)?.name)
+                            .filter(Boolean)
+                            .join(" / ") || "未紐づけ";
+                        return `<option value="${escapeAttribute(product.id)}">${escapeHtml(product.name)}（${product.variants.length}種 / ${escapeHtml(linkedEvents)}）</option>`;
+                      })
+                      .join("")}
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="link-product-stock">初期在庫</label>
+                  <input id="link-product-stock" class="input" name="stock" type="number" min="0" step="1" value="0" required ${!canManage ? "disabled" : ""}>
+                </div>
+                <div class="field">
+                  <label for="link-product-threshold">低在庫しきい値</label>
+                  <input id="link-product-threshold" class="input" name="threshold" type="number" min="0" step="1" value="5" required ${!canManage ? "disabled" : ""}>
+                </div>
+                <button class="button" type="submit" ${!canManage ? "disabled" : ""}>${icon("plus")}紐づけ</button>
+              </form>`
+            : `<div class="empty">紐づけ可能な登録済み商品はありません</div>`
+        }
       </div>
     </section>
     <section class="panel">
@@ -1786,6 +1827,7 @@ function handleSubmit(event) {
   if (action === "auth-form") handleAuth(form);
   if (action === "add-event") addEvent(form);
   if (action === "add-product") addProduct(form);
+  if (action === "link-product-event") linkProductToEvent(form);
   if (action === "add-user") addUser(form);
   if (action === "adjust-stock") adjustStock(form);
   if (action === "save-actual") saveActualStock(form);
@@ -2296,6 +2338,66 @@ function addProduct(form) {
   saveState();
   form.reset();
   showToast("商品を追加しました");
+}
+
+function linkProductToEvent(form) {
+  if (!can("manageProducts")) return;
+  const data = new FormData(form);
+  const event = getActiveEvent();
+  const productId = String(data.get("productId") || "");
+  const stockRaw = String(data.get("stock") ?? "");
+  const thresholdRaw = String(data.get("threshold") ?? "");
+  const stock = Number(stockRaw);
+  const threshold = Number(thresholdRaw);
+  const product = state.products.find((item) => item.id === productId);
+
+  if (!product) {
+    showToast("紐づける商品を選択してください");
+    return;
+  }
+
+  if (productBelongsToEvent(product, event.id)) {
+    showToast("この商品はすでにイベントに紐づいています");
+    return;
+  }
+
+  if (stockRaw === "" || thresholdRaw === "" || !Number.isFinite(stock) || stock < 0 || !Number.isFinite(threshold) || threshold < 0) {
+    showToast("初期在庫と低在庫しきい値は0以上の数値で入力してください");
+    return;
+  }
+
+  const duplicateVariant = product.variants.find((variant) => isDuplicateSku(normalizeCode(variant.sku), variant.id, event.id));
+  if (duplicateVariant) {
+    showToast(`SKU ${duplicateVariant.sku} がこのイベントですでに使われています`);
+    return;
+  }
+
+  product.eventIds = [...new Set([...productEventIds(product), event.id])];
+  product.eventStatuses = {
+    ...(product.eventStatuses || {}),
+    [event.id]: "active",
+  };
+
+  for (const variant of product.variants) {
+    const inventory = inventoryFor(event.id, variant.id);
+    if (inventory) {
+      inventory.threshold = threshold;
+      continue;
+    }
+    state.inventories.push({
+      eventId: event.id,
+      variantId: variant.id,
+      initial: stock,
+      current: stock,
+      threshold,
+      actual: null,
+    });
+  }
+
+  saveState();
+  form.reset();
+  showToast("登録済み商品をイベントに紐づけました");
+  render();
 }
 
 function saveProduct(productId, variantId, row) {
