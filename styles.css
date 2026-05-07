@@ -821,6 +821,10 @@ th.numeric {
   grid-template-columns: repeat(2, minmax(160px, 1fr));
 }
 
+.form-grid.user-create-grid {
+  grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;
+}
+
 .inline-form {
   display: grid;
   grid-template-columns: 90px 1fr 88px;
@@ -966,7 +970,8 @@ th.numeric {
   .filters,
   .form-grid,
   .form-grid.three,
-  .form-grid.two {
+  .form-grid.two,
+  .form-grid.user-create-grid {
     grid-template-columns: 1fr;
   }
 

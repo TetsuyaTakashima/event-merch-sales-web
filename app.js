@@ -521,7 +521,7 @@ function renderAuth() {
           <button class="button" type="submit">${icon(isForgotPassword ? "mail" : isUpdatePassword ? "save" : "check")}${submitLabel}</button>
           ${isUpdatePassword ? `
             <button class="button secondary" data-action="cancel-password-update" type="button">ログインに戻る</button>
-          ` : `
+          ` : isSupabaseMode ? "" : `
             <button class="button secondary" data-action="toggle-auth-mode" type="button">
               ${isSignUp ? "ログインに戻る" : "アカウントを作成"}
             </button>
@@ -1382,7 +1382,36 @@ function renderProductRow(row, canManage) {
 function renderUsers() {
   const canManage = can("manageUsers");
   const addUserBody = isSupabaseMode
-    ? `<div class="notice">新しいスタッフはログイン画面の「アカウントを作成」から登録します。登録後、この一覧でログインID、仮パスワード、権限を変更できます。パスワードは入力した場合のみ変更されます。</div>`
+    ? `
+        <form class="form-grid user-create-grid" data-action="add-user">
+          <div class="field">
+            <label for="user-name">名前</label>
+            <input id="user-name" class="input" name="name" autocomplete="name" required ${!canManage ? "disabled" : ""}>
+          </div>
+          <div class="field">
+            <label for="user-email">ログインID</label>
+            <input id="user-email" class="input" name="email" type="email" autocomplete="email" placeholder="mail@example.com" required ${!canManage ? "disabled" : ""}>
+          </div>
+          <div class="field">
+            <label for="user-password">仮パスワード</label>
+            <input id="user-password" class="input" name="password" type="password" autocomplete="new-password" required minlength="6" ${!canManage ? "disabled" : ""}>
+          </div>
+          <div class="field">
+            <label for="user-role">権限</label>
+            <select id="user-role" class="select" name="role" ${!canManage ? "disabled" : ""}>
+              ${Object.entries(roles).map(([key, label]) => `<option value="${key}" ${key === "staff" ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="user-active">状態</label>
+            <select id="user-active" class="select" name="active" ${!canManage ? "disabled" : ""}>
+              <option value="true" selected>有効</option>
+              <option value="false">無効</option>
+            </select>
+          </div>
+          <button class="button" type="submit" ${!canManage ? "disabled" : ""}>${icon("plus")}追加</button>
+        </form>
+      `
     : `
         <form class="form-grid three" data-action="add-user">
           <div class="field">
@@ -1430,7 +1459,7 @@ function renderUsers() {
       <div class="panel-header">
         <div>
           <h2>ユーザー追加</h2>
-          <p>${isSupabaseMode ? "アカウント作成後のログイン情報と権限を管理" : "操作権限のみ管理"}</p>
+          <p>${isSupabaseMode ? "管理者がログイン情報と権限を作成" : "操作権限のみ管理"}</p>
         </div>
       </div>
       <div class="panel-body">
@@ -2269,14 +2298,47 @@ function saveProduct(productId, variantId, row) {
   showToast("商品を更新しました");
 }
 
-function addUser(form) {
+async function addUser(form) {
   if (!can("manageUsers")) return;
-  if (isSupabaseMode) {
-    showToast("新規スタッフはログイン画面からアカウント作成してください");
-    return;
-  }
   const data = new FormData(form);
   const name = String(data.get("name")).trim();
+
+  if (isSupabaseMode) {
+    const email = String(data.get("email") || "").trim();
+    const password = String(data.get("password") || "");
+    const role = String(data.get("role") || "");
+    const active = String(data.get("active")) === "true";
+
+    if (!name || !email || !password) {
+      showToast("名前、ログインID、仮パスワードを入力してください");
+      return;
+    }
+    if (!email.includes("@")) {
+      showToast("ログインIDはメールアドレス形式で入力してください");
+      return;
+    }
+    if (password.length < 6) {
+      showToast("仮パスワードは6文字以上で入力してください");
+      return;
+    }
+    if (!roles[role]) {
+      showToast("権限の指定が正しくありません");
+      return;
+    }
+
+    try {
+      await createUserByAdmin({ name, email, password, role, active });
+      await loadRemoteData();
+      form.reset();
+      showToast("ユーザーを追加しました");
+      render();
+    } catch (error) {
+      console.error("Failed to create user.", error);
+      showToast(authErrorMessage(error, "ユーザー追加に失敗しました"), 7000);
+    }
+    return;
+  }
+
   if (!name) {
     showToast("ユーザー名を入力してください");
     return;
@@ -2291,6 +2353,26 @@ function addUser(form) {
   saveState();
   form.reset();
   showToast("ユーザーを追加しました");
+}
+
+async function createUserByAdmin(payload) {
+  const session = authSession || (await supabase.auth.getSession()).data.session;
+  if (!session?.access_token) throw new Error("ログイン情報を確認できません");
+
+  const response = await fetch("/api/admin-create-user", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || "ユーザーを追加できませんでした");
+  }
+  return result;
 }
 
 async function saveUser(userId, row) {
