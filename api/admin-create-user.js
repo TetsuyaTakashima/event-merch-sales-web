@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-const roles = new Set(["admin", "manager", "staff", "viewer"]);
+const roles = new Set(["admin", "manager", "staff", "tester", "viewer"]);
 
 export default {
   async fetch(request) {

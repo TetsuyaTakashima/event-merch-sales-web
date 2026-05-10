@@ -9,6 +9,7 @@ const supabase = isSupabaseMode ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
 const STORAGE_KEY = "event-merch-sales-web.v1";
 const UI_STATE_KEY = "event-merch-sales-web.ui.v1";
 const REMOTE_STATE_ID = "main";
+const REMOTE_COMMIT_RETRIES = 5;
 
 const CASH_METHOD = "現金";
 const paymentMethods = ["現金", "クレジットカード", "QR決済", "電子マネー"];
@@ -17,6 +18,7 @@ const roles = {
   admin: "管理者",
   manager: "現場責任者",
   staff: "販売スタッフ",
+  tester: "テスト販売",
   viewer: "閲覧者",
 };
 
@@ -57,8 +59,23 @@ const permissions = {
     manageUsers: false,
     manageData: false,
     deleteCancelledSales: false,
+    dryRunSales: false,
     exportCsv: false,
     viewReports: true,
+  },
+  tester: {
+    sell: true,
+    cancelAny: false,
+    adjustInventory: false,
+    closeEvent: false,
+    manageProducts: false,
+    manageEvents: false,
+    manageUsers: false,
+    manageData: false,
+    deleteCancelledSales: false,
+    dryRunSales: true,
+    exportCsv: false,
+    viewReports: false,
   },
   viewer: {
     sell: false,
@@ -70,6 +87,7 @@ const permissions = {
     manageUsers: false,
     manageData: false,
     deleteCancelledSales: false,
+    dryRunSales: false,
     exportCsv: true,
     viewReports: true,
   },
@@ -116,6 +134,8 @@ let ui = loadUiState({
   category: "すべて",
   historyQuery: "",
   reportEventId: state.selectedEventId,
+  saleSaving: false,
+  pendingSaleId: "",
   toast: "",
 });
 
@@ -203,6 +223,7 @@ function seedState() {
     { id: "usr-admin", name: "佐藤 管理", role: "admin", active: true },
     { id: "usr-manager", name: "田中 責任者", role: "manager", active: true },
     { id: "usr-staff", name: "鈴木 スタッフ", role: "staff", active: true },
+    { id: "usr-tester", name: "テスト販売ユーザー", role: "tester", active: true },
     { id: "usr-viewer", name: "閲覧ユーザー", role: "viewer", active: true },
   ];
 
@@ -461,6 +482,8 @@ function sanitizeUiState(saved, defaults) {
     category: typeof saved?.category === "string" ? saved.category : defaults.category,
     historyQuery: typeof saved?.historyQuery === "string" ? saved.historyQuery : defaults.historyQuery,
     reportEventId,
+    saleSaving: false,
+    pendingSaleId: typeof saved?.pendingSaleId === "string" ? saved.pendingSaleId : "",
     toast: defaults.toast,
   };
 }
@@ -510,6 +533,7 @@ function saveUiState() {
         category: ui.category,
         historyQuery: ui.historyQuery,
         reportEventId: ui.reportEventId,
+        pendingSaleId: ui.pendingSaleId,
         savedAt: new Date().toISOString(),
       }),
     );
@@ -902,6 +926,8 @@ function renderPos() {
   const total = cartTotal();
   const canConfirm = canConfirmCurrentSale(event);
   const blockingNotice = saleBlockingNotice(event, total);
+  const isDryRun = can("dryRunSales");
+  const confirmLabel = ui.saleSaving ? "保存中" : isDryRun ? "テスト販売を確定" : "販売を確定";
   const rows = availableRows
     .filter((row) => selectedCategory === "すべて" || row.product.category === selectedCategory)
     .filter((row) => {
@@ -937,6 +963,7 @@ function renderPos() {
           <button class="icon-button" data-action="clear-cart" type="button" title="カートを空にする" aria-label="カートを空にする">${icon("trash")}</button>
         </div>
         <div class="panel-body stack">
+          ${isDryRun ? `<div class="notice">テスト販売モードです。確定しても販売履歴・集計・在庫には反映されません。</div>` : ""}
           ${renderCart()}
           <div class="field">
             <label>決済方法</label>
@@ -958,7 +985,7 @@ function renderPos() {
             <strong>${yen(total)}</strong>
           </div>
           <button class="button" data-action="confirm-sale" type="button" ${!canConfirm ? "disabled" : ""}>
-            ${icon("check")}販売を確定
+            ${icon("check")}${confirmLabel}
           </button>
           ${blockingNotice ? `<div class="notice">${blockingNotice}</div>` : ""}
         </div>
@@ -1868,6 +1895,7 @@ function handleClick(event) {
 
   if (action === "remove-cart") {
     ui.cart = ui.cart.filter((line) => line.variantId !== target.dataset.variantId);
+    clearPendingSaleDraft();
     render();
     return;
   }
@@ -1875,6 +1903,7 @@ function handleClick(event) {
   if (action === "clear-cart") {
     ui.cart = [];
     ui.cashReceived = "";
+    clearPendingSaleDraft();
     render();
     return;
   }
@@ -1882,12 +1911,14 @@ function handleClick(event) {
   if (action === "set-payment") {
     ui.paymentMethod = target.dataset.payment;
     if (ui.paymentMethod !== CASH_METHOD) ui.cashReceived = "";
+    clearPendingSaleDraft();
     render();
     return;
   }
 
   if (action === "cash-exact") {
     ui.cashReceived = String(cartTotal());
+    clearPendingSaleDraft();
     render();
     return;
   }
@@ -1918,6 +1949,7 @@ function handleClick(event) {
     ui.category = "すべて";
     ui.cart = [];
     ui.cashReceived = "";
+    clearPendingSaleDraft();
     saveState();
     showToast("対象イベントを変更しました");
     return;
@@ -1979,6 +2011,7 @@ function handleInput(event) {
 
   if (action === "cash-received") {
     ui.cashReceived = target.value;
+    clearPendingSaleDraft();
     render();
   }
 }
@@ -1998,6 +2031,7 @@ function handleChange(event) {
     ui.category = "すべて";
     ui.cart = [];
     ui.cashReceived = "";
+    clearPendingSaleDraft();
     saveState();
     render();
   }
@@ -2223,18 +2257,40 @@ async function loadRemoteData() {
 }
 
 async function fetchRemoteState() {
-  const { data, error } = await supabase.from("app_state").select("data").eq("id", REMOTE_STATE_ID).maybeSingle();
+  const record = await fetchRemoteStateRecord();
+  return record.data;
+}
+
+async function fetchRemoteStateRecord() {
+  const { data, error } = await supabase.from("app_state").select("data,updated_at").eq("id", REMOTE_STATE_ID).maybeSingle();
   if (error) throw error;
-  if (data?.data) return data.data;
+  if (data?.data) {
+    return {
+      data: data.data,
+      updatedAt: data.updated_at,
+    };
+  }
 
   const initialState = serializeStateForRemote(seedState());
-  const { error: insertError } = await supabase.from("app_state").insert({
-    id: REMOTE_STATE_ID,
-    data: initialState,
-    updated_at: new Date().toISOString(),
-  });
-  if (insertError) throw insertError;
-  return initialState;
+  const { data: inserted, error: insertError } = await supabase
+    .from("app_state")
+    .insert({
+      id: REMOTE_STATE_ID,
+      data: initialState,
+      updated_at: new Date().toISOString(),
+    })
+    .select("data,updated_at")
+    .maybeSingle();
+
+  if (insertError) {
+    if (insertError.code === "23505") return fetchRemoteStateRecord();
+    throw insertError;
+  }
+
+  return {
+    data: inserted?.data || initialState,
+    updatedAt: inserted?.updated_at || new Date().toISOString(),
+  };
 }
 
 async function fetchProfiles() {
@@ -2267,6 +2323,7 @@ function addCart(variantId) {
   } else {
     ui.cart.push({ variantId, quantity: 1 });
   }
+  clearPendingSaleDraft();
   render();
 }
 
@@ -2278,15 +2335,23 @@ function changeCartQuantity(variantId, delta) {
   const next = line.quantity + delta;
   if (next <= 0) {
     ui.cart = ui.cart.filter((item) => item.variantId !== variantId);
+    clearPendingSaleDraft();
+    render();
   } else if (next > row.inventory.current) {
     showToast("在庫数を超えて追加できません");
   } else {
     line.quantity = next;
+    clearPendingSaleDraft();
     render();
   }
 }
 
-function confirmSale() {
+function clearPendingSaleDraft() {
+  ui.pendingSaleId = "";
+}
+
+async function confirmSale() {
+  if (ui.saleSaving) return;
   const event = getActiveEvent();
   if (!can("sell")) {
     showToast("現在の権限では販売登録できません");
@@ -2334,15 +2399,11 @@ function confirmSale() {
     };
   });
 
-  for (const line of ui.cart) {
-    const inventory = inventoryFor(event.id, line.variantId);
-    inventory.current -= line.quantity;
-  }
-
   const total = items.reduce((sum, item) => sum + item.subtotal, 0);
   const cashReceived = ui.paymentMethod === CASH_METHOD ? cashReceivedAmount() : null;
+  ui.pendingSaleId = ui.pendingSaleId || uid("sale");
   const sale = {
-    id: uid("sale"),
+    id: ui.pendingSaleId,
     eventId: event.id,
     userId: state.currentUserId,
     createdAt: new Date().toISOString(),
@@ -2356,11 +2417,132 @@ function confirmSale() {
     cancelReason: "",
   };
 
-  state.sales.push(sale);
-  ui.cart = [];
-  ui.cashReceived = "";
-  saveState();
-  showToast(`販売を登録しました ${yen(sale.total)}`);
+  if (can("dryRunSales")) {
+    ui.cart = [];
+    ui.cashReceived = "";
+    clearPendingSaleDraft();
+    showToast("テスト販売を完了しました。履歴・集計・在庫には反映していません");
+    render();
+    return;
+  }
+
+  ui.saleSaving = true;
+  if (isSupabaseMode) syncStatus = "保存中";
+  render();
+
+  try {
+    if (isSupabaseMode) {
+      state = await commitSaleToRemote(sale);
+      state.currentUserId = authProfile?.id || state.currentUserId;
+    } else {
+      applySaleToState(state, sale);
+      await saveState();
+    }
+
+    ui.cart = [];
+    ui.cashReceived = "";
+    clearPendingSaleDraft();
+    showToast(`販売を登録しました ${yen(sale.total)}`);
+  } catch (error) {
+    console.error("Failed to confirm sale.", error);
+    if (isSupabaseMode) syncStatus = "保存失敗";
+    showToast(saleCommitErrorMessage(error), 7000);
+  } finally {
+    ui.saleSaving = false;
+    render();
+  }
+}
+
+async function commitSaleToRemote(sale) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= REMOTE_COMMIT_RETRIES; attempt += 1) {
+    const record = await fetchRemoteStateRecord();
+    const remoteState = normalizeState({
+      ...record.data,
+      users: state.users,
+      currentUserId: state.currentUserId,
+    });
+
+    const result = applySaleToState(remoteState, sale);
+    if (!result.ok) throw new Error(result.message);
+
+    if (result.alreadyApplied) {
+      syncStatus = "保存済み";
+      return remoteState;
+    }
+
+    const payload = serializeStateForRemote(remoteState);
+    const { data, error } = await supabase
+      .from("app_state")
+      .update({
+        data: payload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", REMOTE_STATE_ID)
+      .eq("updated_at", record.updatedAt)
+      .select("data,updated_at")
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data?.data) {
+      syncStatus = "保存済み";
+      return normalizeState({
+        ...data.data,
+        users: state.users,
+        currentUserId: state.currentUserId,
+      });
+    }
+
+    lastError = new Error("同時更新があったため再試行しました");
+    await delay(120 * attempt);
+  }
+
+  throw lastError || new Error("販売データを保存できませんでした");
+}
+
+function applySaleToState(targetState, sale) {
+  if (targetState.sales.some((item) => item.id === sale.id)) {
+    return { ok: true, alreadyApplied: true };
+  }
+
+  const event = targetState.events.find((item) => item.id === sale.eventId);
+  if (!event || event.status !== "open") {
+    return { ok: false, message: "販売中のイベントではないため保存できませんでした" };
+  }
+
+  for (const item of sale.items) {
+    const inventory = inventoryInState(targetState, sale.eventId, item.variantId);
+    if (!inventory || inventory.current < item.quantity) {
+      return { ok: false, message: "サーバー側の在庫が不足しています。画面を更新して確認してください" };
+    }
+  }
+
+  for (const item of sale.items) {
+    const inventory = inventoryInState(targetState, sale.eventId, item.variantId);
+    inventory.current -= item.quantity;
+  }
+
+  targetState.sales.push(sale);
+  return { ok: true, alreadyApplied: false };
+}
+
+function inventoryInState(targetState, eventId, variantId) {
+  return targetState.inventories.find((inventory) => inventory.eventId === eventId && inventory.variantId === variantId);
+}
+
+function saleCommitErrorMessage(error) {
+  const message = error?.message || "";
+  if (message.includes("Failed to fetch") || message.includes("NetworkError") || message.includes("fetch")) {
+    return "通信エラーのため販売を保存できませんでした。カートは残しています。接続を確認してもう一度確定してください";
+  }
+  return `${message || "販売を保存できませんでした"}。カートは残しています`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function cancelSale(saleId) {
@@ -3375,6 +3557,7 @@ function cashChangeDue(total = cartTotal()) {
 }
 
 function canConfirmCurrentSale(event) {
+  if (ui.saleSaving) return false;
   if (!can("sell") || event.status !== "open" || ui.cart.length === 0) return false;
   if (ui.paymentMethod !== CASH_METHOD) return true;
   const change = cashChangeDue();
@@ -3424,6 +3607,9 @@ function authErrorMessage(error, fallback) {
   }
   if (normalized.includes("redirect")) {
     return "SupabaseのRedirect URLsにVercelのURLを追加してください。";
+  }
+  if (normalized.includes("profiles_role_check")) {
+    return "Supabaseの権限制約にテスト販売ロールが未追加です。supabase/add-tester-role.sql をSQL Editorで実行してください。";
   }
 
   return message ? `${fallback}: ${message}` : fallback;

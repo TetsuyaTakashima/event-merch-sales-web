@@ -4,11 +4,16 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text,
   name text not null,
-  role text not null default 'staff' check (role in ('admin', 'manager', 'staff', 'viewer')),
+  role text not null default 'staff',
   active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.profiles drop constraint if exists profiles_role_check;
+alter table public.profiles
+  add constraint profiles_role_check
+  check (role in ('admin', 'manager', 'staff', 'tester', 'viewer'));
 
 create table if not exists public.app_state (
   id text primary key,
