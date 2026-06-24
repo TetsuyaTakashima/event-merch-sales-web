@@ -18,8 +18,17 @@ alter table public.profiles
 create table if not exists public.app_state (
   id text primary key,
   data jsonb not null,
+  version bigint not null default 0,
   updated_at timestamptz not null default now()
 );
+
+alter table public.app_state
+  add column if not exists version bigint not null default 0;
+
+alter table public.app_state drop constraint if exists app_state_version_check;
+alter table public.app_state
+  add constraint app_state_version_check
+  check (version >= 0);
 
 create or replace function public.touch_updated_at()
 returns trigger
@@ -67,6 +76,22 @@ as $$
   );
 $$;
 
+create or replace function public.can_write_app_state()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles
+    where id = auth.uid()
+      and role in ('admin', 'manager', 'staff')
+      and active = true
+  );
+$$;
+
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -107,6 +132,7 @@ grant select, insert, update on public.app_state to authenticated;
 grant all privileges on public.app_state to service_role;
 grant execute on function public.is_active_user() to authenticated, service_role;
 grant execute on function public.is_admin_user() to authenticated, service_role;
+grant execute on function public.can_write_app_state() to authenticated, service_role;
 grant execute on function public.handle_new_user() to service_role;
 grant execute on function public.touch_updated_at() to service_role;
 
@@ -133,11 +159,11 @@ drop policy if exists "app_state_insert_active" on public.app_state;
 create policy "app_state_insert_active"
 on public.app_state for insert
 to authenticated
-with check (public.is_active_user());
+with check (public.can_write_app_state());
 
 drop policy if exists "app_state_update_active" on public.app_state;
 create policy "app_state_update_active"
 on public.app_state for update
 to authenticated
-using (public.is_active_user())
-with check (public.is_active_user());
+using (public.can_write_app_state())
+with check (public.can_write_app_state());

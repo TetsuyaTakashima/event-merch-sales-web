@@ -123,6 +123,8 @@ let authSession = null;
 let authProfile = null;
 let syncStatus = isSupabaseMode ? "未接続" : "ローカル保存";
 let saveQueue = Promise.resolve();
+let remoteStateVersion = null;
+let remoteStateEpoch = 0;
 
 let ui = loadUiState({
   view: "dashboard",
@@ -422,23 +424,68 @@ function saveState() {
   }
 
   const payload = serializeStateForRemote(state);
+  const epoch = remoteStateEpoch;
   syncStatus = "保存中";
   saveQueue = saveQueue
     .then(async () => {
-      const { error } = await supabase.from("app_state").upsert({
-        id: REMOTE_STATE_ID,
-        data: payload,
-        updated_at: new Date().toISOString(),
-      });
+      if (epoch !== remoteStateEpoch) return;
+      if (!Number.isSafeInteger(remoteStateVersion)) {
+        throw new Error("共有データの更新番号を確認できません");
+      }
+
+      const expectedVersion = remoteStateVersion;
+      const { data, error } = await supabase
+        .from("app_state")
+        .update({
+          data: payload,
+          version: expectedVersion + 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", REMOTE_STATE_ID)
+        .eq("version", expectedVersion)
+        .select("version")
+        .maybeSingle();
       if (error) throw error;
+      if (!data) {
+        const conflict = new Error("共有データが別の端末で更新されました");
+        conflict.code = "REMOTE_STATE_CONFLICT";
+        throw conflict;
+      }
+      remoteStateVersion = Number(data.version);
       syncStatus = "保存済み";
     })
-    .catch((error) => {
+    .catch(async (error) => {
       console.error("Failed to save remote state.", error);
+      if (error?.code === "REMOTE_STATE_CONFLICT") {
+        await reloadAfterRemoteConflict();
+        return;
+      }
       syncStatus = "保存失敗";
       showToast("Supabaseへの保存に失敗しました");
     });
   return saveQueue;
+}
+
+async function reloadAfterRemoteConflict() {
+  remoteStateEpoch += 1;
+  try {
+    const record = await fetchRemoteStateRecord();
+    remoteStateVersion = record.version;
+    state = normalizeState({
+      ...record.data,
+      users: state.users,
+      currentUserId: authProfile?.id || state.currentUserId,
+    });
+    state.currentUserId = authProfile?.id || state.currentUserId;
+    restoreUiForCurrentState();
+    syncStatus = "共有中";
+    showToast("別の端末で更新されたため、最新データを再読込しました。操作内容を確認してもう一度実行してください", 7000);
+    render();
+  } catch (reloadError) {
+    console.error("Failed to reload remote state after conflict.", reloadError);
+    syncStatus = "保存失敗";
+    showToast("同時更新を検出しましたが、最新データを再読込できませんでした。画面を更新してください", 7000);
+  }
 }
 
 function serializeStateForRemote(source) {
@@ -1020,29 +1067,36 @@ function renderCashPanel(total) {
 function renderProductCard(row) {
   const stock = inventoryFor(getActiveEvent().id, row.variant.id)?.current ?? 0;
   const disabled = stock <= 0 || getActiveEvent().status !== "open" || !can("sell");
+  const cartQuantity = ui.cart.find((line) => line.variantId === row.variant.id)?.quantity || 0;
+  const productLabel = `${row.product.name} ${row.variant.name}、${yen(row.variant.price)}、${disabled ? "追加できません" : "カートに追加"}`;
   return `
-    <article class="product-card ${disabled ? "is-disabled" : ""}">
-      <div class="product-top">
+    <button
+      class="product-card ${disabled ? "is-disabled" : ""}"
+      data-action="add-cart"
+      data-variant-id="${row.variant.id}"
+      type="button"
+      aria-label="${escapeAttribute(productLabel)}"
+      ${disabled ? "disabled" : ""}
+    >
+      <span class="product-top">
         <span class="swatch" style="background:${escapeAttribute(row.variant.color)}"></span>
-        <div>
-          <h3 class="product-name">${escapeHtml(row.product.name)} / ${escapeHtml(row.variant.name)}</h3>
-          <div class="product-meta">
+        <span class="product-heading">
+          <span class="product-name">${escapeHtml(row.product.name)} / ${escapeHtml(row.variant.name)}</span>
+          <span class="product-meta">
             <span>${escapeHtml(row.product.category)}</span>
             <span>${escapeHtml(row.variant.sku)}</span>
-          </div>
-        </div>
-      </div>
-      <div class="product-meta">
+          </span>
+        </span>
+      </span>
+      <span class="product-meta">
         <span class="status ${stock <= row.inventory.threshold ? "low" : "active"}">在庫 ${stock}</span>
         <span>${escapeHtml(row.product.code)}</span>
-      </div>
-      <footer>
+      </span>
+      <span class="product-card-footer">
         <span class="price">${yen(row.variant.price)}</span>
-        <button class="button secondary" data-action="add-cart" data-variant-id="${row.variant.id}" type="button" ${disabled ? "disabled" : ""}>
-          ${icon("plus")}追加
-        </button>
-      </footer>
-    </article>
+        <span class="product-card-add">${icon("plus")}${cartQuantity > 0 ? `カート内 ${cartQuantity}点` : "カートに追加"}</span>
+      </span>
+    </button>
   `;
 }
 
@@ -2210,6 +2264,8 @@ async function signOut() {
   await supabase.auth.signOut();
   authSession = null;
   authProfile = null;
+  remoteStateVersion = null;
+  remoteStateEpoch += 1;
   state = seedState();
   appReady = true;
   ui.authMode = "sign-in";
@@ -2234,6 +2290,7 @@ async function loadRemoteData() {
 
   authProfile = profile;
   if (!profile.active) {
+    remoteStateVersion = null;
     state = normalizeState({
       ...seedState(),
       users: profiles.length ? profiles : [profile],
@@ -2244,9 +2301,10 @@ async function loadRemoteData() {
     return;
   }
 
-  const remoteState = await fetchRemoteState();
+  const remoteRecord = await fetchRemoteState();
+  remoteStateVersion = remoteRecord.version;
   state = normalizeState({
-    ...remoteState,
+    ...remoteRecord.data,
     users: profiles.length ? profiles : [profile],
     currentUserId: profile.id,
   });
@@ -2257,17 +2315,17 @@ async function loadRemoteData() {
 }
 
 async function fetchRemoteState() {
-  const record = await fetchRemoteStateRecord();
-  return record.data;
+  return fetchRemoteStateRecord();
 }
 
 async function fetchRemoteStateRecord() {
-  const { data, error } = await supabase.from("app_state").select("data,updated_at").eq("id", REMOTE_STATE_ID).maybeSingle();
+  const { data, error } = await supabase.from("app_state").select("data,updated_at,version").eq("id", REMOTE_STATE_ID).maybeSingle();
   if (error) throw error;
   if (data?.data) {
     return {
       data: data.data,
       updatedAt: data.updated_at,
+      version: Number(data.version || 0),
     };
   }
 
@@ -2277,9 +2335,10 @@ async function fetchRemoteStateRecord() {
     .insert({
       id: REMOTE_STATE_ID,
       data: initialState,
+      version: 0,
       updated_at: new Date().toISOString(),
     })
-    .select("data,updated_at")
+    .select("data,updated_at,version")
     .maybeSingle();
 
   if (insertError) {
@@ -2290,6 +2349,7 @@ async function fetchRemoteStateRecord() {
   return {
     data: inserted?.data || initialState,
     updatedAt: inserted?.updated_at || new Date().toISOString(),
+    version: Number(inserted?.version || 0),
   };
 }
 
@@ -2468,6 +2528,7 @@ async function commitSaleToRemote(sale) {
     if (!result.ok) throw new Error(result.message);
 
     if (result.alreadyApplied) {
+      remoteStateVersion = record.version;
       syncStatus = "保存済み";
       return remoteState;
     }
@@ -2477,15 +2538,17 @@ async function commitSaleToRemote(sale) {
       .from("app_state")
       .update({
         data: payload,
+        version: record.version + 1,
         updated_at: new Date().toISOString(),
       })
       .eq("id", REMOTE_STATE_ID)
-      .eq("updated_at", record.updatedAt)
-      .select("data,updated_at")
+      .eq("version", record.version)
+      .select("data,updated_at,version")
       .maybeSingle();
 
     if (error) throw error;
     if (data?.data) {
+      remoteStateVersion = Number(data.version);
       syncStatus = "保存済み";
       return normalizeState({
         ...data.data,
@@ -3768,6 +3831,8 @@ async function initApp() {
       }
       if (!session) {
         authProfile = null;
+        remoteStateVersion = null;
+        remoteStateEpoch += 1;
         ui.authMode = "sign-in";
         appReady = true;
         render();

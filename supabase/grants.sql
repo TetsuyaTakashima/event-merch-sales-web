@@ -8,5 +8,6 @@ grant all privileges on public.app_state to service_role;
 
 grant execute on function public.is_active_user() to authenticated, service_role;
 grant execute on function public.is_admin_user() to authenticated, service_role;
+grant execute on function public.can_write_app_state() to authenticated, service_role;
 grant execute on function public.handle_new_user() to service_role;
 grant execute on function public.touch_updated_at() to service_role;
