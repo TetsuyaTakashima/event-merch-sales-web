@@ -494,6 +494,7 @@ button:disabled {
 }
 
 .product-card {
+  width: 100%;
   min-height: 160px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -501,15 +502,45 @@ button:disabled {
   background: var(--surface);
   display: grid;
   gap: 12px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.product-card:not(:disabled):hover {
+  border-color: var(--accent);
+  box-shadow: 0 8px 20px rgba(23, 33, 30, 0.1);
+  transform: translateY(-1px);
+}
+
+.product-card:not(:disabled):active {
+  transform: translateY(0);
+  background: var(--accent-soft);
+}
+
+.product-card:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
 }
 
 .product-card.is-disabled {
   background: #f2f3f0;
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 .product-top {
   display: flex;
   gap: 12px;
+  min-width: 0;
+}
+
+.product-heading {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -522,8 +553,9 @@ button:disabled {
 }
 
 .product-name {
-  margin: 0;
+  display: block;
   font-size: 15px;
+  font-weight: 800;
   line-height: 1.35;
 }
 
@@ -536,7 +568,7 @@ button:disabled {
   flex-wrap: wrap;
 }
 
-.product-card footer {
+.product-card-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -544,9 +576,23 @@ button:disabled {
   margin-top: auto;
 }
 
-.product-card footer .button {
-  min-width: 96px;
-  flex: 0 0 auto;
+.product-card-add {
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.product-card-add .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .price {
@@ -1198,7 +1244,7 @@ th.numeric {
     display: none;
   }
 
-  .product-card footer {
+  .product-card-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1209,16 +1255,14 @@ th.numeric {
     font-size: 14px;
   }
 
-  .product-card footer .button {
-    width: auto;
-    min-width: 58px;
+  .product-card-add {
     min-height: 34px;
     padding: 0 8px;
     gap: 4px;
     font-size: 12px;
   }
 
-  .product-card footer .button .icon {
+  .product-card-add .icon {
     width: 14px;
     height: 14px;
   }

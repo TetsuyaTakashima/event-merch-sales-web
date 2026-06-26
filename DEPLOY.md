@@ -27,6 +27,8 @@
 6. VercelでDeployする。
 7. SupabaseのAuthentication > URL Configurationで、Vercelの公開URLをSite URLとRedirect URLsに追加する。
 
+既存のSupabase環境を更新する場合は、デプロイ前に `supabase/add-app-state-version.sql` をSQL Editorで実行してください。
+
 パスワード再設定メールを使う場合、Redirect URLsには以下のようなURLを入れます。
 
 ```text
