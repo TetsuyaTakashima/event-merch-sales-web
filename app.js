@@ -9,7 +9,6 @@ const supabase = isSupabaseMode ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
 const STORAGE_KEY = "event-merch-sales-web.v1";
 const UI_STATE_KEY = "event-merch-sales-web.ui.v1";
 const REMOTE_STATE_ID = "main";
-const REMOTE_COMMIT_RETRIES = 5;
 
 const CASH_METHOD = "現金";
 const paymentMethods = ["現金", "クレジットカード", "QR決済", "電子マネー"];
@@ -125,6 +124,7 @@ let syncStatus = isSupabaseMode ? "未接続" : "ローカル保存";
 let saveQueue = Promise.resolve();
 let remoteStateVersion = null;
 let remoteStateEpoch = 0;
+let remoteStateChannel = null;
 
 let ui = loadUiState({
   view: "dashboard",
@@ -435,15 +435,10 @@ function saveState() {
 
       const expectedVersion = remoteStateVersion;
       const { data, error } = await supabase
-        .from("app_state")
-        .update({
-          data: payload,
-          version: expectedVersion + 1,
-          updated_at: new Date().toISOString(),
+        .rpc("save_app_state", {
+          p_data: payload,
+          p_expected_version: expectedVersion,
         })
-        .eq("id", REMOTE_STATE_ID)
-        .eq("version", expectedVersion)
-        .select("version")
         .maybeSingle();
       if (error) throw error;
       if (!data) {
@@ -456,7 +451,7 @@ function saveState() {
     })
     .catch(async (error) => {
       console.error("Failed to save remote state.", error);
-      if (error?.code === "REMOTE_STATE_CONFLICT") {
+      if (isRemoteStateConflict(error)) {
         await reloadAfterRemoteConflict();
         return;
       }
@@ -464,6 +459,80 @@ function saveState() {
       showToast("Supabaseへの保存に失敗しました");
     });
   return saveQueue;
+}
+
+function isRemoteStateConflict(error) {
+  return error?.code === "REMOTE_STATE_CONFLICT" || error?.code === "40001" || error?.message?.includes("REMOTE_STATE_CONFLICT");
+}
+
+async function applyRemoteStateResult(record) {
+  if (!record?.data) throw new Error("共有データの保存結果を確認できませんでした");
+  remoteStateVersion = Number(record.version);
+  syncStatus = "保存済み";
+  return normalizeState({
+    ...record.data,
+    users: state.users,
+    currentUserId: state.currentUserId,
+  });
+}
+
+async function runRemoteStateRpc(functionName, params) {
+  syncStatus = "保存中";
+  const { data, error } = await supabase.rpc(functionName, params).maybeSingle();
+  if (error) throw error;
+  state = await applyRemoteStateResult(data);
+  state.currentUserId = authProfile?.id || state.currentUserId;
+  restoreUiForCurrentState();
+  return state;
+}
+
+function subscribeRemoteStateChanges() {
+  if (!isSupabaseMode || !authSession || remoteStateChannel) return;
+
+  remoteStateChannel = supabase
+    .channel("app-state-main")
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "app_state",
+        filter: `id=eq.${REMOTE_STATE_ID}`,
+      },
+      (payload) => {
+        applyRemoteRealtimePayload(payload).catch((error) => {
+          console.warn("Failed to apply realtime state update.", error);
+        });
+      },
+    )
+    .subscribe();
+}
+
+async function unsubscribeRemoteStateChanges() {
+  if (!remoteStateChannel) return;
+  const channel = remoteStateChannel;
+  remoteStateChannel = null;
+  await supabase.removeChannel(channel).catch(() => {});
+}
+
+async function applyRemoteRealtimePayload(payload) {
+  const record = payload?.new;
+  if (!record?.data) return;
+  const nextVersion = Number(record.version);
+  if (!Number.isSafeInteger(nextVersion)) return;
+  if (Number.isSafeInteger(remoteStateVersion) && nextVersion <= remoteStateVersion) return;
+
+  remoteStateVersion = nextVersion;
+  state = normalizeState({
+    ...record.data,
+    users: state.users,
+    currentUserId: authProfile?.id || state.currentUserId,
+  });
+  state.currentUserId = authProfile?.id || state.currentUserId;
+  restoreUiForCurrentState();
+  syncStatus = "共有中";
+  showToast("別の端末の更新を反映しました", 5000);
+  render();
 }
 
 async function reloadAfterRemoteConflict() {
@@ -489,7 +558,7 @@ async function reloadAfterRemoteConflict() {
 }
 
 function serializeStateForRemote(source) {
-  const { users, currentUserId, ...rest } = source;
+  const { users, currentUserId, selectedEventId, ...rest } = source;
   return rest;
 }
 
@@ -2004,7 +2073,8 @@ function handleClick(event) {
     ui.cart = [];
     ui.cashReceived = "";
     clearPendingSaleDraft();
-    saveState();
+    if (!isSupabaseMode) saveState();
+    saveUiState();
     showToast("対象イベントを変更しました");
     return;
   }
@@ -2086,13 +2156,13 @@ function handleChange(event) {
     ui.cart = [];
     ui.cashReceived = "";
     clearPendingSaleDraft();
-    saveState();
+    if (!isSupabaseMode) saveState();
     render();
   }
 
   if (action === "select-user") {
     state.currentUserId = target.value;
-    saveState();
+    if (!isSupabaseMode) saveState();
     render();
   }
 
@@ -2261,6 +2331,7 @@ function isPasswordRecoveryUrl() {
 
 async function signOut() {
   if (!isSupabaseMode) return;
+  await unsubscribeRemoteStateChanges();
   await supabase.auth.signOut();
   authSession = null;
   authProfile = null;
@@ -2290,6 +2361,7 @@ async function loadRemoteData() {
 
   authProfile = profile;
   if (!profile.active) {
+    await unsubscribeRemoteStateChanges();
     remoteStateVersion = null;
     state = normalizeState({
       ...seedState(),
@@ -2312,6 +2384,7 @@ async function loadRemoteData() {
   restoreUiForCurrentState();
   ui.reportEventId = state.events.some((event) => event.id === ui.reportEventId) ? ui.reportEventId : state.selectedEventId;
   syncStatus = "共有中";
+  subscribeRemoteStateChanges();
 }
 
 async function fetchRemoteState() {
@@ -2330,16 +2403,7 @@ async function fetchRemoteStateRecord() {
   }
 
   const initialState = serializeStateForRemote(seedState());
-  const { data: inserted, error: insertError } = await supabase
-    .from("app_state")
-    .insert({
-      id: REMOTE_STATE_ID,
-      data: initialState,
-      version: 0,
-      updated_at: new Date().toISOString(),
-    })
-    .select("data,updated_at,version")
-    .maybeSingle();
+  const { data: inserted, error: insertError } = await supabase.rpc("initialize_app_state", { p_data: initialState }).maybeSingle();
 
   if (insertError) {
     if (insertError.code === "23505") return fetchRemoteStateRecord();
@@ -2514,54 +2578,9 @@ async function confirmSale() {
 }
 
 async function commitSaleToRemote(sale) {
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= REMOTE_COMMIT_RETRIES; attempt += 1) {
-    const record = await fetchRemoteStateRecord();
-    const remoteState = normalizeState({
-      ...record.data,
-      users: state.users,
-      currentUserId: state.currentUserId,
-    });
-
-    const result = applySaleToState(remoteState, sale);
-    if (!result.ok) throw new Error(result.message);
-
-    if (result.alreadyApplied) {
-      remoteStateVersion = record.version;
-      syncStatus = "保存済み";
-      return remoteState;
-    }
-
-    const payload = serializeStateForRemote(remoteState);
-    const { data, error } = await supabase
-      .from("app_state")
-      .update({
-        data: payload,
-        version: record.version + 1,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", REMOTE_STATE_ID)
-      .eq("version", record.version)
-      .select("data,updated_at,version")
-      .maybeSingle();
-
-    if (error) throw error;
-    if (data?.data) {
-      remoteStateVersion = Number(data.version);
-      syncStatus = "保存済み";
-      return normalizeState({
-        ...data.data,
-        users: state.users,
-        currentUserId: state.currentUserId,
-      });
-    }
-
-    lastError = new Error("同時更新があったため再試行しました");
-    await delay(120 * attempt);
-  }
-
-  throw lastError || new Error("販売データを保存できませんでした");
+  const { data, error } = await supabase.rpc("create_sale", { p_sale: sale }).maybeSingle();
+  if (error) throw error;
+  return applyRemoteStateResult(data);
 }
 
 function applySaleToState(targetState, sale) {
@@ -2602,13 +2621,18 @@ function saleCommitErrorMessage(error) {
   return `${message || "販売を保存できませんでした"}。カートは残しています`;
 }
 
-function delay(ms) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
+function remoteActionErrorMessage(error, fallback) {
+  const message = error?.message || "";
+  if (message.includes("Failed to fetch") || message.includes("NetworkError") || message.includes("fetch")) {
+    return `通信エラーのため${fallback}。接続を確認してもう一度実行してください`;
+  }
+  if (isRemoteStateConflict(error)) {
+    return "別の端末で更新されたため保存できませんでした。最新データを確認してもう一度実行してください";
+  }
+  return message || fallback;
 }
 
-function cancelSale(saleId) {
+async function cancelSale(saleId) {
   const sale = state.sales.find((item) => item.id === saleId);
   if (!sale || sale.status !== "completed") return;
   if (!canCancelSale(sale)) {
@@ -2618,9 +2642,27 @@ function cancelSale(saleId) {
 
   const reason = prompt("取消理由を入力してください", "誤登録");
   if (reason === null) return;
+  const cancelReason = reason.trim() || "未入力";
+
+  if (isSupabaseMode) {
+    try {
+      await runRemoteStateRpc("cancel_sale", {
+        p_sale_id: saleId,
+        p_reason: cancelReason,
+      });
+      showToast("販売を取消しました");
+      render();
+    } catch (error) {
+      console.error("Failed to cancel sale.", error);
+      syncStatus = "保存失敗";
+      showToast(remoteActionErrorMessage(error, "販売取消に失敗しました"), 7000);
+      render();
+    }
+    return;
+  }
 
   sale.status = "cancelled";
-  sale.cancelReason = reason.trim() || "未入力";
+  sale.cancelReason = cancelReason;
   sale.cancelledAt = new Date().toISOString();
 
   for (const item of sale.items) {
@@ -2632,7 +2674,7 @@ function cancelSale(saleId) {
   showToast("販売を取消しました");
 }
 
-function deleteCancelledSale(saleId) {
+async function deleteCancelledSale(saleId) {
   const sale = state.sales.find((item) => item.id === saleId);
   if (!sale || sale.status !== "cancelled") return;
   if (!canDeleteCancelledSale(sale)) {
@@ -2642,6 +2684,20 @@ function deleteCancelledSale(saleId) {
 
   const ok = confirm("取消済みの販売履歴を削除します。削除後はバックアップ以外から戻せません。よろしいですか？");
   if (!ok) return;
+
+  if (isSupabaseMode) {
+    try {
+      await runRemoteStateRpc("delete_cancelled_sale", { p_sale_id: saleId });
+      showToast("取消済みの販売履歴を削除しました");
+      render();
+    } catch (error) {
+      console.error("Failed to delete cancelled sale.", error);
+      syncStatus = "保存失敗";
+      showToast(remoteActionErrorMessage(error, "取消済み販売の削除に失敗しました"), 7000);
+      render();
+    }
+    return;
+  }
 
   state.sales = state.sales.filter((item) => item.id !== sale.id);
   saveState();
@@ -3230,13 +3286,14 @@ async function restoreDataFromFile(input) {
   }
 }
 
-function adjustStock(form) {
+async function adjustStock(form) {
   if (!can("adjustInventory")) return;
   const data = new FormData(form);
   const amount = Number(data.get("amount"));
   const reason = String(data.get("reason")).trim();
   const variantId = String(data.get("variantId"));
-  const inventory = inventoryFor(getActiveEvent().id, variantId);
+  const eventId = getActiveEvent().id;
+  const inventory = inventoryFor(eventId, variantId);
 
   if (!inventory || !Number.isFinite(amount) || amount === 0) {
     showToast("調整数を入力してください");
@@ -3247,10 +3304,30 @@ function adjustStock(form) {
     return;
   }
 
+  if (isSupabaseMode) {
+    try {
+      await runRemoteStateRpc("adjust_inventory", {
+        p_event_id: eventId,
+        p_variant_id: variantId,
+        p_amount: Math.trunc(amount),
+        p_reason: reason || "未入力",
+      });
+      form.reset();
+      showToast("在庫を調整しました");
+      render();
+    } catch (error) {
+      console.error("Failed to adjust inventory.", error);
+      syncStatus = "保存失敗";
+      showToast(remoteActionErrorMessage(error, "在庫調整に失敗しました"), 7000);
+      render();
+    }
+    return;
+  }
+
   inventory.current += amount;
   state.adjustments.push({
     id: uid("adj"),
-    eventId: getActiveEvent().id,
+    eventId,
     variantId,
     amount,
     reason: reason || "未入力",
@@ -3262,15 +3339,40 @@ function adjustStock(form) {
   showToast("在庫を調整しました");
 }
 
-function saveActualStock(form) {
+async function saveActualStock(form) {
   if (!can("adjustInventory")) return;
   const data = new FormData(form);
   const variantId = String(data.get("variantId"));
   const actualRaw = String(data.get("actual"));
-  const inventory = inventoryFor(getActiveEvent().id, variantId);
+  const eventId = getActiveEvent().id;
+  const inventory = inventoryFor(eventId, variantId);
   if (!inventory) return;
 
-  inventory.actual = actualRaw === "" ? null : Number(actualRaw);
+  const actual = actualRaw === "" ? null : Number(actualRaw);
+  if (actual !== null && !Number.isFinite(actual)) {
+    showToast("実在庫は数値で入力してください");
+    return;
+  }
+
+  if (isSupabaseMode) {
+    try {
+      await runRemoteStateRpc("save_actual_stock", {
+        p_event_id: eventId,
+        p_variant_id: variantId,
+        p_actual: actual,
+      });
+      showToast("実在庫を保存しました");
+      render();
+    } catch (error) {
+      console.error("Failed to save actual stock.", error);
+      syncStatus = "保存失敗";
+      showToast(remoteActionErrorMessage(error, "実在庫保存に失敗しました"), 7000);
+      render();
+    }
+    return;
+  }
+
+  inventory.actual = actual;
   saveState();
   showToast("実在庫を保存しました");
 }
@@ -3500,7 +3602,7 @@ function ensureInventory(eventId, variantId, initial = 0, threshold = 5) {
   if (!inventory) {
     inventory = { eventId, variantId, initial, current: initial, threshold, actual: null };
     state.inventories.push(inventory);
-    saveState();
+    if (!isSupabaseMode) saveState();
   }
   return inventory;
 }
@@ -3830,6 +3932,7 @@ async function initApp() {
         return;
       }
       if (!session) {
+        await unsubscribeRemoteStateChanges();
         authProfile = null;
         remoteStateVersion = null;
         remoteStateEpoch += 1;
@@ -3839,6 +3942,7 @@ async function initApp() {
         return;
       }
       if (session) {
+        await unsubscribeRemoteStateChanges();
         appReady = false;
         render();
         if (ui.authMode !== "update-password") {

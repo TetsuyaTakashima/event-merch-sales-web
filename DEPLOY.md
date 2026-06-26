@@ -14,9 +14,10 @@
 
 1. Supabaseでプロジェクトを作成する。
 2. Supabase SQL Editorで `supabase/schema.sql` を実行する。
-3. GitHubにこのフォルダの中身をpushする。
-4. VercelでGitHubリポジトリをImportする。
-5. VercelのEnvironment Variablesに以下を設定する。
+3. Supabase SQL Editorで `supabase/add-app-state-rpc.sql` を実行する。
+4. GitHubにこのフォルダの中身をpushする。
+5. VercelでGitHubリポジトリをImportする。
+6. VercelのEnvironment Variablesに以下を設定する。
 
 | Key | 内容 |
 | --- | --- |
@@ -24,10 +25,11 @@
 | `VITE_SUPABASE_ANON_KEY` | Supabase anon/publishable key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service_role key |
 
-6. VercelでDeployする。
-7. SupabaseのAuthentication > URL Configurationで、Vercelの公開URLをSite URLとRedirect URLsに追加する。
+7. VercelでDeployする。
+8. デプロイ成功後、Supabase SQL Editorで `supabase/lock-down-app-state-writes.sql` を実行する。
+9. SupabaseのAuthentication > URL Configurationで、Vercelの公開URLをSite URLとRedirect URLsに追加する。
 
-既存のSupabase環境を更新する場合は、デプロイ前に `supabase/add-app-state-version.sql` をSQL Editorで実行してください。
+既存のSupabase環境を更新する場合は、デプロイ前に `supabase/add-app-state-version.sql` と `supabase/add-app-state-rpc.sql` をSQL Editorで実行してください。`supabase/lock-down-app-state-writes.sql` はRPC対応版のデプロイ成功後に実行します。古いアプリコードのまま先に実行すると販売保存が失敗します。
 
 パスワード再設定メールを使う場合、Redirect URLsには以下のようなURLを入れます。
 
