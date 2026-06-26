@@ -40,7 +40,7 @@ npm run dev
 - `VITE_SUPABASE_URL` と `VITE_SUPABASE_ANON_KEY` を設定した場合: Supabaseの `app_state` に共有保存
 - 環境変数を設定しない場合: ブラウザの `localStorage` にローカル保存
 
-Supabaseモードでは更新番号による競合検知を行い、別端末の更新を古い画面の内容で上書きしません。競合時は最新データを再読込し、操作のやり直しを案内します。
+Supabaseモードでは更新番号による競合検知を行い、別端末の更新を古い画面の内容で上書きしません。販売登録、販売取消、取消済み販売の削除、在庫調整、実在庫保存はSupabase RPCで処理し、DB側でも権限と在庫を確認します。別端末の更新はRealtimeで画面へ反映し、競合時は最新データを再読込して操作のやり直しを案内します。
 
 画面右上の「バックアップ」からJSONを書き出し、「復元」から戻せます。「初期データに戻す」からサンプルデータへ戻せます。
 
@@ -55,3 +55,5 @@ Supabaseモードでは更新番号による競合検知を行い、別端末の
 - `open-app.bat`: Windows向け起動ファイル
 - `vercel.json`: Vercel向け設定
 - `supabase/schema.sql`: Supabase用DB/RLS設定
+- `supabase/add-app-state-rpc.sql`: 共有データ操作用RPCの追加
+- `supabase/lock-down-app-state-writes.sql`: RPC移行後に `app_state` の直接書込を閉じる追加設定

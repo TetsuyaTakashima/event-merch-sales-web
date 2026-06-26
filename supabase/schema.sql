@@ -87,7 +87,7 @@ as $$
     select 1
     from public.profiles
     where id = auth.uid()
-      and role in ('admin', 'manager', 'staff')
+      and role in ('admin', 'manager')
       and active = true
   );
 $$;
@@ -128,7 +128,8 @@ alter table public.app_state enable row level security;
 grant usage on schema public to anon, authenticated, service_role;
 grant select, update on public.profiles to authenticated;
 grant all privileges on public.profiles to service_role;
-grant select, insert, update on public.app_state to authenticated;
+revoke insert, update on public.app_state from authenticated;
+grant select on public.app_state to authenticated;
 grant all privileges on public.app_state to service_role;
 grant execute on function public.is_active_user() to authenticated, service_role;
 grant execute on function public.is_admin_user() to authenticated, service_role;
@@ -160,6 +161,9 @@ create policy "app_state_insert_active"
 on public.app_state for insert
 to authenticated
 with check (public.can_write_app_state());
+
+-- RPC関数とapp_state直書き制限は supabase/add-app-state-rpc.sql で追加します。
+-- 新規セットアップ時も schema.sql の後に add-app-state-rpc.sql を実行してください。
 
 drop policy if exists "app_state_update_active" on public.app_state;
 create policy "app_state_update_active"
