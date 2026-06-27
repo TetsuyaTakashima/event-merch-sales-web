@@ -469,10 +469,15 @@ async function applyRemoteStateResult(record) {
   if (!record?.data) throw new Error("共有データの保存結果を確認できませんでした");
   remoteStateVersion = Number(record.version);
   syncStatus = "保存済み";
+  return normalizeRemoteState(record.data);
+}
+
+function normalizeRemoteState(data, overrides = {}) {
   return normalizeState({
-    ...record.data,
-    users: state.users,
-    currentUserId: state.currentUserId,
+    ...data,
+    users: overrides.users ?? state.users,
+    currentUserId: overrides.currentUserId ?? state.currentUserId,
+    selectedEventId: overrides.selectedEventId ?? state.selectedEventId,
   });
 }
 
@@ -523,9 +528,7 @@ async function applyRemoteRealtimePayload(payload) {
   if (Number.isSafeInteger(remoteStateVersion) && nextVersion <= remoteStateVersion) return;
 
   remoteStateVersion = nextVersion;
-  state = normalizeState({
-    ...record.data,
-    users: state.users,
+  state = normalizeRemoteState(record.data, {
     currentUserId: authProfile?.id || state.currentUserId,
   });
   state.currentUserId = authProfile?.id || state.currentUserId;
@@ -540,9 +543,7 @@ async function reloadAfterRemoteConflict() {
   try {
     const record = await fetchRemoteStateRecord();
     remoteStateVersion = record.version;
-    state = normalizeState({
-      ...record.data,
-      users: state.users,
+    state = normalizeRemoteState(record.data, {
       currentUserId: authProfile?.id || state.currentUserId,
     });
     state.currentUserId = authProfile?.id || state.currentUserId;
@@ -2379,8 +2380,7 @@ async function loadRemoteData() {
 
   const remoteRecord = await fetchRemoteState();
   remoteStateVersion = remoteRecord.version;
-  state = normalizeState({
-    ...remoteRecord.data,
+  state = normalizeRemoteState(remoteRecord.data, {
     users: profiles.length ? profiles : [profile],
     currentUserId: profile.id,
   });
