@@ -125,6 +125,7 @@ let saveQueue = Promise.resolve();
 let remoteStateVersion = null;
 let remoteStateEpoch = 0;
 let remoteStateChannel = null;
+let pendingRestoreSnapshot = null;
 
 let ui = loadUiState({
   view: "dashboard",
@@ -138,6 +139,9 @@ let ui = loadUiState({
   reportEventId: state.selectedEventId,
   saleSaving: false,
   pendingSaleId: "",
+  retrySales: [],
+  recentSale: null,
+  modal: null,
   toast: "",
 });
 
@@ -583,6 +587,67 @@ function normalizeCartSnapshot(lines) {
     .filter((line) => line.variantId && Number.isFinite(line.quantity));
 }
 
+function normalizeQueuedSalesSnapshot(lines) {
+  if (!Array.isArray(lines)) return [];
+  return lines
+    .map((entry) => {
+      const sale = entry?.sale;
+      if (!sale?.id || !sale?.eventId || !Array.isArray(sale.items) || sale.items.length === 0) return null;
+      return {
+        id: String(entry.id || sale.id),
+        sale: {
+          ...sale,
+          id: String(sale.id),
+          eventId: String(sale.eventId),
+          userId: String(sale.userId || ""),
+          createdAt: sale.createdAt || new Date().toISOString(),
+          paymentMethod: paymentMethods.includes(sale.paymentMethod) ? sale.paymentMethod : CASH_METHOD,
+          cashReceived: sale.cashReceived ?? null,
+          changeDue: sale.changeDue ?? null,
+          status: sale.status || "completed",
+          total: Number(sale.total || 0),
+          items: sale.items
+            .map((item) => ({
+              productId: String(item?.productId || ""),
+              variantId: String(item?.variantId || ""),
+              name: String(item?.name || ""),
+              variantName: String(item?.variantName || ""),
+              quantity: Math.max(1, Math.floor(Number(item?.quantity || 1))),
+              unitPrice: Number(item?.unitPrice || 0),
+              subtotal: Number(item?.subtotal || 0),
+            }))
+            .filter((item) => item.variantId && item.quantity > 0),
+          cancelledAt: sale.cancelledAt || "",
+          cancelReason: sale.cancelReason || "",
+        },
+        eventName: String(entry.eventName || ""),
+        total: Number(entry.total || sale.total || 0),
+        itemCount: Math.max(1, Math.floor(Number(entry.itemCount || sale.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)))),
+        queuedAt: entry.queuedAt || new Date().toISOString(),
+        lastError: String(entry.lastError || ""),
+        attempts: Math.max(0, Math.floor(Number(entry.attempts || 0))),
+      };
+    })
+    .filter(Boolean)
+    .filter((entry) => state.events.some((event) => event.id === entry.sale.eventId))
+    .slice(0, 20);
+}
+
+function normalizeRecentSaleSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  return {
+    id: String(snapshot.id || ""),
+    eventName: String(snapshot.eventName || ""),
+    status: ["completed", "queued", "dry-run"].includes(snapshot.status) ? snapshot.status : "completed",
+    total: Number(snapshot.total || 0),
+    paymentMethod: paymentMethods.includes(snapshot.paymentMethod) ? snapshot.paymentMethod : CASH_METHOD,
+    cashReceived: snapshot.cashReceived ?? null,
+    changeDue: snapshot.changeDue ?? null,
+    itemCount: Math.max(0, Math.floor(Number(snapshot.itemCount || 0))),
+    createdAt: snapshot.createdAt || "",
+  };
+}
+
 function sanitizeUiState(saved, defaults) {
   const view = viewTitles[saved?.view] ? saved.view : defaults.view;
   const reportEventId = state.events.some((event) => event.id === saved?.reportEventId) ? saved.reportEventId : state.selectedEventId;
@@ -601,6 +666,9 @@ function sanitizeUiState(saved, defaults) {
     reportEventId,
     saleSaving: false,
     pendingSaleId: typeof saved?.pendingSaleId === "string" ? saved.pendingSaleId : "",
+    retrySales: normalizeQueuedSalesSnapshot(saved?.retrySales),
+    recentSale: normalizeRecentSaleSnapshot(saved?.recentSale),
+    modal: null,
     toast: defaults.toast,
   };
 }
@@ -651,6 +719,8 @@ function saveUiState() {
         historyQuery: ui.historyQuery,
         reportEventId: ui.reportEventId,
         pendingSaleId: ui.pendingSaleId,
+        retrySales: normalizeQueuedSalesSnapshot(ui.retrySales),
+        recentSale: normalizeRecentSaleSnapshot(ui.recentSale),
         savedAt: new Date().toISOString(),
       }),
     );
@@ -845,12 +915,15 @@ function shell(content) {
   const currentUser = getCurrentUser();
   const currentUserOptions = renderUserOptions();
   const canManageData = can("manageData");
+  const pendingUsers = pendingApprovalUsers();
+  const labelWithBadge = (item) => (item.id === "users" && pendingUsers.length ? `${item.label}（承認待ち${pendingUsers.length}）` : item.label);
   const nav = navItems
     .map(
       (item) => `
         <button class="nav-button ${ui.view === item.id ? "is-active" : ""}" data-action="view" data-view="${item.id}">
           ${icon(item.icon)}
           <span>${item.label}</span>
+          ${item.id === "users" && pendingUsers.length ? `<span class="nav-badge">${pendingUsers.length}</span>` : ""}
         </button>
       `,
     )
@@ -867,7 +940,7 @@ function shell(content) {
           </div>
         </div>
         <select class="select mobile-nav" data-action="mobile-view" aria-label="画面選択">
-          ${navItems.map((item) => `<option value="${item.id}" ${ui.view === item.id ? "selected" : ""}>${item.label}</option>`).join("")}
+          ${navItems.map((item) => `<option value="${item.id}" ${ui.view === item.id ? "selected" : ""}>${labelWithBadge(item)}</option>`).join("")}
         </select>
         <nav class="nav">${nav}</nav>
         <div class="sidebar-footer">
@@ -895,8 +968,124 @@ function shell(content) {
         <section class="content">${content}</section>
       </main>
       ${ui.toast ? `<div class="toast">${escapeHtml(ui.toast)}</div>` : ""}
+      ${ui.modal ? renderModal() : ""}
     </div>
   `;
+}
+
+function renderModal() {
+  const modal = ui.modal;
+  if (!modal) return "";
+  const isDanger = modal.tone === "danger";
+  const message = escapeHtml(modal.message || "").replaceAll("\n", "<br>");
+  const cancelSaleFields =
+    modal.type === "cancel-sale"
+      ? `
+        <div class="field">
+          <label for="modal-cancel-preset">取消理由</label>
+          <select id="modal-cancel-preset" class="select" name="cancelReasonPreset">
+            <option value="誤登録">誤登録</option>
+            <option value="決済方法の入力間違い">決済方法の入力間違い</option>
+            <option value="数量の入力間違い">数量の入力間違い</option>
+            <option value="返品対応">返品対応</option>
+            <option value="">その他・自由入力</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="modal-cancel-reason">補足</label>
+          <textarea id="modal-cancel-reason" class="textarea" name="cancelReason" placeholder="必要に応じて入力"></textarea>
+        </div>
+      `
+      : "";
+
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title" data-modal-card>
+        <div class="modal-header">
+          <div>
+            <h2 id="modal-title">${escapeHtml(modal.title || "確認")}</h2>
+            ${modal.description ? `<p>${escapeHtml(modal.description)}</p>` : ""}
+          </div>
+          <button class="icon-button" data-action="modal-cancel" type="button" title="閉じる" aria-label="閉じる">${icon("x")}</button>
+        </div>
+        <div class="modal-body">
+          ${message ? `<p>${message}</p>` : ""}
+          ${cancelSaleFields}
+        </div>
+        <div class="modal-actions">
+          <button class="button secondary" data-action="modal-cancel" type="button">${escapeHtml(modal.cancelLabel || "キャンセル")}</button>
+          <button class="button ${isDanger ? "danger" : ""}" data-action="modal-confirm" type="button">${escapeHtml(modal.confirmLabel || "実行")}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function openConfirmModal({ type, title, message, description = "", confirmLabel = "実行", cancelLabel = "キャンセル", tone = "default", payload = {} }) {
+  ui.modal = { type, title, message, description, confirmLabel, cancelLabel, tone, payload };
+  render();
+}
+
+function closeModal() {
+  if (ui.modal?.type === "restore-data") {
+    pendingRestoreSnapshot = null;
+    document.querySelectorAll('[data-action="restore-data"]').forEach((input) => {
+      input.value = "";
+    });
+  }
+  ui.modal = null;
+  render();
+}
+
+async function confirmModal(card) {
+  const modal = ui.modal;
+  if (!modal) return;
+
+  let reason = "";
+  if (modal.type === "cancel-sale") {
+    const preset = card?.querySelector('[name="cancelReasonPreset"]')?.value.trim() || "";
+    const detail = card?.querySelector('[name="cancelReason"]')?.value.trim() || "";
+    reason = detail || preset || "未入力";
+  }
+
+  ui.modal = null;
+  render();
+
+  if (modal.type === "reset-demo") {
+    performResetDemo();
+    return;
+  }
+  if (modal.type === "event-switch") {
+    applyEventSwitch(modal.payload.eventId);
+    return;
+  }
+  if (modal.type === "cancel-sale") {
+    await cancelSale(modal.payload.saleId, reason);
+    return;
+  }
+  if (modal.type === "delete-cancelled-sale") {
+    await performDeleteCancelledSale(modal.payload.saleId);
+    return;
+  }
+  if (modal.type === "delete-event") {
+    performDeleteEvent(modal.payload.eventId);
+    return;
+  }
+  if (modal.type === "delete-product") {
+    performDeleteProduct(modal.payload.productId, modal.payload.variantId);
+    return;
+  }
+  if (modal.type === "delete-user") {
+    await performDeleteUser(modal.payload.userId);
+    return;
+  }
+  if (modal.type === "restore-data") {
+    await performRestoreData();
+    return;
+  }
+  if (modal.type === "remove-retry-sale") {
+    removeQueuedSale(modal.payload.saleId);
+  }
 }
 
 function renderView() {
@@ -1053,6 +1242,7 @@ function renderPos() {
     });
 
   return `
+    ${renderSyncStatusCard()}
     <div class="split">
       <section class="stack">
         <div class="filters">
@@ -1081,7 +1271,10 @@ function renderPos() {
         </div>
         <div class="panel-body stack">
           ${isDryRun ? `<div class="notice">テスト販売モードです。確定しても販売履歴・集計・在庫には反映されません。</div>` : ""}
+          ${renderSyncStatusCard(true)}
+          ${renderRecentSale()}
           ${renderCart()}
+          ${renderQueuedSales()}
           <div class="field">
             <label>決済方法</label>
             <div class="segmented">
@@ -1101,12 +1294,122 @@ function renderPos() {
             <span>合計</span>
             <strong>${yen(total)}</strong>
           </div>
-          <button class="button" data-action="confirm-sale" type="button" ${!canConfirm ? "disabled" : ""}>
+          <button class="button ${!canConfirm ? "is-soft-disabled" : ""}" data-action="confirm-sale" type="button" aria-disabled="${canConfirm ? "false" : "true"}" ${ui.saleSaving ? "disabled" : ""}>
             ${icon("check")}${confirmLabel}
           </button>
           ${blockingNotice ? `<div class="notice">${blockingNotice}</div>` : ""}
         </div>
       </aside>
+    </div>
+    ${renderMobileCheckoutBar(total, canConfirm, confirmLabel, blockingNotice)}
+  `;
+}
+
+function renderSyncStatusCard(compact = false) {
+  const queuedCount = ui.retrySales.length;
+  if (!isSupabaseMode && queuedCount === 0) return "";
+
+  const isError = syncStatus.includes("失敗");
+  const isSaving = syncStatus.includes("保存中");
+  const className = ["sync-status-card", compact ? "is-compact" : "", isError || queuedCount ? "is-warning" : isSaving ? "is-saving" : ""]
+    .filter(Boolean)
+    .join(" ");
+  const title = queuedCount ? `未送信の販売が${queuedCount}件あります` : isSupabaseMode ? syncStatus : "ローカル保存";
+  const detail = queuedCount
+    ? "通信が戻ったら、この画面から再送できます。"
+    : isSaving
+      ? "共有データへ保存しています。"
+      : isSupabaseMode
+        ? "複数端末で共有中です。"
+        : "このブラウザに保存中です。";
+
+  return `
+    <div class="${className}">
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        ${compact ? "" : `<span>${escapeHtml(detail)}</span>`}
+      </div>
+      ${queuedCount ? `<span class="status low">未送信 ${queuedCount}</span>` : `<span class="status ${isError ? "inactive" : "active"}">${escapeHtml(syncStatus)}</span>`}
+    </div>
+  `;
+}
+
+function renderRecentSale() {
+  const sale = normalizeRecentSaleSnapshot(ui.recentSale);
+  if (!sale?.id && sale?.status !== "dry-run") return "";
+
+  const statusLabel = sale.status === "queued" ? "未送信" : sale.status === "dry-run" ? "テスト完了" : "登録済み";
+  const statusClass = sale.status === "queued" ? "low" : "active";
+  const cashDetail =
+    sale.paymentMethod === CASH_METHOD && sale.cashReceived !== null && sale.cashReceived !== undefined
+      ? `<span>受取 ${yen(Number(sale.cashReceived))} / おつり ${yen(Number(sale.changeDue || 0))}</span>`
+      : "";
+
+  return `
+    <div class="recent-sale">
+      <div class="recent-sale-main">
+        <span class="status ${statusClass}">${statusLabel}</span>
+        <div>
+          <strong>直近の会計 ${yen(sale.total)}</strong>
+          <span>${escapeHtml(sale.eventName || getActiveEvent().name)} / ${escapeHtml(sale.paymentMethod)} / ${sale.itemCount}点</span>
+          ${cashDetail}
+        </div>
+      </div>
+      <button class="icon-button" data-action="clear-recent-sale" type="button" title="閉じる" aria-label="直近の会計表示を閉じる">${icon("x")}</button>
+    </div>
+  `;
+}
+
+function renderQueuedSales() {
+  const entries = normalizeQueuedSalesSnapshot(ui.retrySales);
+  if (!entries.length) return "";
+
+  return `
+    <div class="retry-sales">
+      <div class="retry-sales-header">
+        <strong>未送信の販売</strong>
+        <span>${entries.length}件</span>
+      </div>
+      ${entries
+        .map(
+          (entry) => `
+            <div class="retry-sale">
+              <div>
+                <strong>${yen(entry.total)}</strong>
+                <span>${escapeHtml(entry.eventName || eventNameById(entry.sale.eventId))} / ${entry.itemCount}点 / ${formatDateTime(entry.sale.createdAt)}</span>
+                ${entry.lastError ? `<span class="muted">前回エラー: ${escapeHtml(entry.lastError)}</span>` : ""}
+              </div>
+              <div class="retry-sale-actions">
+                <button class="button secondary" data-action="retry-sale" data-sale-id="${escapeAttribute(entry.id)}" type="button" ${ui.saleSaving || !can("sell") ? "disabled" : ""}>
+                  ${icon("refresh")}再送
+                </button>
+                <button class="icon-button" data-action="remove-retry-sale" data-sale-id="${escapeAttribute(entry.id)}" type="button" title="未送信リストから削除" aria-label="未送信リストから削除">
+                  ${icon("trash")}
+                </button>
+              </div>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderMobileCheckoutBar(total, canConfirm, confirmLabel, blockingNotice) {
+  const itemCount = ui.cart.reduce((sum, line) => sum + line.quantity, 0);
+  const queueLabel = ui.retrySales.length ? `未送信 ${ui.retrySales.length}件` : syncStatus;
+  const buttonLabel = itemCount === 0 ? "商品を選択" : canConfirm ? confirmLabel : "確認する";
+
+  return `
+    <div class="mobile-checkout-bar">
+      <div class="mobile-checkout-meta">
+        <span>${itemCount}点 / ${escapeHtml(queueLabel || "保存待機")}</span>
+        <strong>${yen(total)}</strong>
+        ${blockingNotice ? `<small>${escapeHtml(blockingNotice)}</small>` : ""}
+      </div>
+      <button class="button ${!canConfirm ? "is-soft-disabled" : ""}" data-action="confirm-sale" type="button" aria-disabled="${canConfirm ? "false" : "true"}" ${ui.saleSaving ? "disabled" : ""}>
+        ${icon("check")}${buttonLabel}
+      </button>
     </div>
   `;
 }
@@ -1559,7 +1862,7 @@ function renderEvents() {
       <div class="panel-header">
         <div>
           <h2>イベント追加</h2>
-          <p>追加時点では各商品の在庫は0で作成</p>
+          <p>必要に応じて既存イベントの商品・初期在庫をコピーできます</p>
         </div>
       </div>
       <div class="panel-body">
@@ -1575,6 +1878,13 @@ function renderEvents() {
           <div class="field">
             <label for="event-venue">会場</label>
             <input id="event-venue" class="input" name="venue" required ${!canManage ? "disabled" : ""}>
+          </div>
+          <div class="field">
+            <label for="event-copy-source">商品・在庫コピー元</label>
+            <select id="event-copy-source" class="select" name="sourceEventId" ${!canManage ? "disabled" : ""}>
+              <option value="">コピーしない（在庫0）</option>
+              ${state.events.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}
+            </select>
           </div>
           <button class="button" type="submit" ${!canManage ? "disabled" : ""}>${icon("plus")}追加</button>
         </form>
@@ -1605,6 +1915,7 @@ function renderEventRow(event, canManage) {
         <div class="row-actions">
           <button class="button secondary" data-action="activate-event" data-event-id="${event.id}" type="button">${icon("check")}選択</button>
           <button class="button secondary" data-action="save-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("save")}保存</button>
+          <button class="button secondary" data-action="duplicate-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("copy")}複製</button>
           <button class="button secondary" data-action="set-event-status" data-event-id="${event.id}" data-status="open" type="button" ${!canManage ? "disabled" : ""}>${icon("play")}販売中</button>
           <button class="button warning" data-action="set-event-status" data-event-id="${event.id}" data-status="closed" type="button" ${!can("closeEvent") ? "disabled" : ""}>${icon("lock")}終了</button>
           <button class="button danger" data-action="delete-event" data-event-id="${event.id}" type="button" ${deleteDisabled ? "disabled" : ""}>${icon("trash")}削除</button>
@@ -1795,6 +2106,8 @@ function renderProductRow(row, canManage, eventId) {
 
 function renderUsers() {
   const canManage = can("manageUsers");
+  const pendingUsers = pendingApprovalUsers();
+  const sortedUsers = [...state.users].sort((a, b) => Number(a.active) - Number(b.active) || a.name.localeCompare(b.name, "ja"));
   const addUserBody = isSupabaseMode
     ? `
         <form class="form-grid user-create-grid" data-action="add-user">
@@ -1847,10 +2160,12 @@ function renderUsers() {
       <div class="panel-header">
         <div>
           <h2>ユーザー一覧</h2>
-          <p>操作ユーザーと権限を確認</p>
+          <p>操作ユーザーと権限を確認${pendingUsers.length ? ` / 承認待ち ${pendingUsers.length}件` : ""}</p>
         </div>
+        ${pendingUsers.length ? `<span class="status low">承認待ち ${pendingUsers.length}</span>` : ""}
       </div>
       <div class="panel-body">
+        ${pendingUsers.length ? `<div class="notice">承認待ちのユーザーがいます。利用開始するには状態を「有効」にして保存してください。</div>` : ""}
         <div class="table-wrap">
           <table class="mobile-card-table users-table ${isSupabaseMode ? "is-supabase" : "is-local"}">
             <thead>
@@ -1863,7 +2178,7 @@ function renderUsers() {
               </tr>
             </thead>
             <tbody>
-              ${state.users.map((user) => renderUserRow(user, canManage)).join("")}
+              ${sortedUsers.map((user) => renderUserRow(user, canManage)).join("")}
             </tbody>
           </table>
         </div>
@@ -1886,12 +2201,14 @@ function renderUsers() {
 function renderUserRow(user, canManage) {
   const deleteDisabled = !canManage || user.id === state.currentUserId || isLastActiveAdmin(user.id);
   const saveDisabled = !canManage;
+  const isPending = isSupabaseMode && !user.active;
 
   return `
-    <tr data-user-row="${user.id}">
+    <tr data-user-row="${user.id}" class="${isPending ? "is-pending-user" : ""}">
       <td data-label="名前">
         <input class="input table-input" name="userName" value="${escapeAttribute(user.name)}" ${saveDisabled ? "disabled" : ""}>
         ${user.id === state.currentUserId ? `<div class="muted">現在の操作ユーザー</div>` : ""}
+        ${isPending ? `<div class="muted">承認待ちです。有効化すると利用できます。</div>` : ""}
       </td>
       ${
         isSupabaseMode
@@ -1915,9 +2232,9 @@ function renderUserRow(user, canManage) {
       <td data-label="状態">
         <select class="select table-input" name="userActive" ${saveDisabled ? "disabled" : ""}>
           <option value="true" ${user.active ? "selected" : ""}>有効</option>
-          <option value="false" ${!user.active ? "selected" : ""}>無効</option>
+          <option value="false" ${!user.active ? "selected" : ""}>${isSupabaseMode ? "承認待ち" : "無効"}</option>
         </select>
-        <div><span class="status ${user.active ? "active" : "inactive"}">${user.active ? "有効" : "無効"}</span></div>
+        <div><span class="status ${user.active ? "active" : isSupabaseMode ? "low" : "inactive"}">${user.active ? "有効" : isSupabaseMode ? "承認待ち" : "無効"}</span></div>
       </td>
       <td data-label="操作">
         <div class="row-actions">
@@ -1942,6 +2259,16 @@ function handleClick(event) {
   if (!target) return;
 
   const action = target.dataset.action;
+
+  if (action === "modal-cancel" || action === "close-modal") {
+    closeModal();
+    return;
+  }
+
+  if (action === "modal-confirm") {
+    confirmModal(target.closest("[data-modal-card]"));
+    return;
+  }
 
   if (action === "view") {
     ui.view = target.dataset.view;
@@ -1979,21 +2306,13 @@ function handleClick(event) {
       showToast("現在の権限では初期データに戻せません");
       return;
     }
-    if (confirm("サンプルデータに戻します。現在のローカルデータは消えます。")) {
-      state = seedState();
-      ui = {
-        ...ui,
-        cart: [],
-        paymentMethod: CASH_METHOD,
-        cashReceived: "",
-        search: "",
-        category: "すべて",
-        historyQuery: "",
-        reportEventId: state.selectedEventId,
-      };
-      saveState();
-      showToast("初期データに戻しました");
-    }
+    openConfirmModal({
+      type: "reset-demo",
+      title: "初期データに戻しますか？",
+      message: "現在のローカルデータはサンプルデータで置き換わります。必要な場合は先にバックアップしてください。",
+      confirmLabel: "初期データに戻す",
+      tone: "danger",
+    });
     return;
   }
 
@@ -2057,7 +2376,7 @@ function handleClick(event) {
   }
 
   if (action === "cancel-sale") {
-    cancelSale(target.dataset.saleId);
+    openCancelSaleModal(target.dataset.saleId);
     return;
   }
 
@@ -2072,15 +2391,7 @@ function handleClick(event) {
   }
 
   if (action === "activate-event") {
-    state.selectedEventId = target.dataset.eventId;
-    ui.reportEventId = target.dataset.eventId;
-    ui.category = "すべて";
-    ui.cart = [];
-    ui.cashReceived = "";
-    clearPendingSaleDraft();
-    if (!isSupabaseMode) saveState();
-    saveUiState();
-    showToast("対象イベントを変更しました");
+    requestEventSwitch(target.dataset.eventId);
     return;
   }
 
@@ -2091,6 +2402,11 @@ function handleClick(event) {
 
   if (action === "save-event") {
     saveEvent(target.dataset.eventId, target.closest("[data-event-row]"));
+    return;
+  }
+
+  if (action === "duplicate-event") {
+    duplicateEvent(target.dataset.eventId);
     return;
   }
 
@@ -2121,6 +2437,29 @@ function handleClick(event) {
 
   if (action === "delete-user") {
     deleteUser(target.dataset.userId);
+    return;
+  }
+
+  if (action === "clear-recent-sale") {
+    ui.recentSale = null;
+    render();
+    return;
+  }
+
+  if (action === "retry-sale") {
+    retryQueuedSale(target.dataset.saleId);
+    return;
+  }
+
+  if (action === "remove-retry-sale") {
+    openConfirmModal({
+      type: "remove-retry-sale",
+      title: "未送信の販売を削除しますか？",
+      message: "この未送信データは再送できなくなります。販売登録が不要な場合のみ削除してください。",
+      confirmLabel: "未送信から削除",
+      tone: "danger",
+      payload: { saleId: target.dataset.saleId },
+    });
   }
 }
 
@@ -2155,14 +2494,7 @@ function handleChange(event) {
   }
 
   if (action === "select-event") {
-    state.selectedEventId = target.value;
-    ui.reportEventId = target.value;
-    ui.category = "すべて";
-    ui.cart = [];
-    ui.cashReceived = "";
-    clearPendingSaleDraft();
-    if (!isSupabaseMode) saveState();
-    render();
+    requestEventSwitch(target.value);
   }
 
   if (action === "select-user") {
@@ -2478,6 +2810,67 @@ function clearPendingSaleDraft() {
   ui.pendingSaleId = "";
 }
 
+function performResetDemo() {
+  state = seedState();
+  pendingRestoreSnapshot = null;
+  ui = {
+    ...ui,
+    cart: [],
+    paymentMethod: CASH_METHOD,
+    cashReceived: "",
+    search: "",
+    category: "すべて",
+    historyQuery: "",
+    reportEventId: state.selectedEventId,
+    pendingSaleId: "",
+    retrySales: [],
+    recentSale: null,
+    modal: null,
+  };
+  saveState();
+  showToast("初期データに戻しました");
+}
+
+function requestEventSwitch(eventId) {
+  if (!eventId || eventId === state.selectedEventId) {
+    render();
+    return;
+  }
+  const nextEvent = state.events.find((event) => event.id === eventId);
+  if (!nextEvent) {
+    render();
+    return;
+  }
+
+  const itemCount = ui.cart.reduce((sum, line) => sum + line.quantity, 0);
+  if (itemCount > 0) {
+    openConfirmModal({
+      type: "event-switch",
+      title: "イベントを切り替えますか？",
+      message: `現在のカート ${itemCount}点はクリアされます。\n切り替え先: ${nextEvent.name}`,
+      confirmLabel: "切り替える",
+      tone: "danger",
+      payload: { eventId },
+    });
+    return;
+  }
+
+  applyEventSwitch(eventId);
+}
+
+function applyEventSwitch(eventId) {
+  if (!state.events.some((event) => event.id === eventId)) return;
+  state.selectedEventId = eventId;
+  ui.reportEventId = eventId;
+  ui.category = "すべて";
+  ui.cart = [];
+  ui.cashReceived = "";
+  clearPendingSaleDraft();
+  if (!isSupabaseMode) saveState();
+  saveUiState();
+  showToast("対象イベントを変更しました");
+}
+
 async function confirmSale() {
   if (ui.saleSaving) return;
   const event = getActiveEvent();
@@ -2546,6 +2939,7 @@ async function confirmSale() {
   };
 
   if (can("dryRunSales")) {
+    ui.recentSale = saleSummarySnapshot(sale, "dry-run");
     ui.cart = [];
     ui.cashReceived = "";
     clearPendingSaleDraft();
@@ -2569,12 +2963,18 @@ async function confirmSale() {
 
     ui.cart = [];
     ui.cashReceived = "";
+    ui.recentSale = saleSummarySnapshot(sale, "completed");
     clearPendingSaleDraft();
     showToast(`販売を登録しました ${yen(sale.total)}`);
   } catch (error) {
     console.error("Failed to confirm sale.", error);
     if (isSupabaseMode) syncStatus = "保存失敗";
-    showToast(saleCommitErrorMessage(error), 7000);
+    if (isSupabaseMode && isNetworkTransportError(error)) {
+      queueFailedSale(sale, error);
+      showToast("通信エラーのため未送信として保存しました。接続が戻ったらカート内の未送信リストから再送してください", 8000);
+    } else {
+      showToast(saleCommitErrorMessage(error), 7000);
+    }
   } finally {
     ui.saleSaving = false;
     render();
@@ -2617,17 +3017,105 @@ function inventoryInState(targetState, eventId, variantId) {
   return targetState.inventories.find((inventory) => inventory.eventId === eventId && inventory.variantId === variantId);
 }
 
+function saleSummarySnapshot(sale, status = "completed") {
+  return {
+    id: sale.id,
+    eventName: eventNameById(sale.eventId),
+    status,
+    total: Number(sale.total || 0),
+    paymentMethod: sale.paymentMethod,
+    cashReceived: sale.cashReceived ?? null,
+    changeDue: sale.changeDue ?? null,
+    itemCount: sale.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+    createdAt: sale.createdAt,
+  };
+}
+
+function isNetworkTransportError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return message.includes("failed to fetch") || message.includes("networkerror") || message.includes("network error") || message.includes("load failed") || message.includes("fetch");
+}
+
+function queueFailedSale(sale, error) {
+  const entry = {
+    id: sale.id,
+    sale,
+    eventName: eventNameById(sale.eventId),
+    total: sale.total,
+    itemCount: sale.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+    queuedAt: new Date().toISOString(),
+    lastError: String(error?.message || "通信エラー"),
+    attempts: 0,
+  };
+
+  ui.retrySales = [entry, ...normalizeQueuedSalesSnapshot(ui.retrySales).filter((item) => item.id !== sale.id)];
+  ui.recentSale = saleSummarySnapshot(sale, "queued");
+  ui.cart = [];
+  ui.cashReceived = "";
+  clearPendingSaleDraft();
+  saveUiState();
+}
+
+async function retryQueuedSale(saleId) {
+  if (ui.saleSaving) return;
+  const entry = normalizeQueuedSalesSnapshot(ui.retrySales).find((item) => item.id === saleId);
+  if (!entry) {
+    showToast("再送する未送信データが見つかりません");
+    return;
+  }
+  if (!can("sell")) {
+    showToast("現在の権限では販売登録できません");
+    return;
+  }
+
+  ui.saleSaving = true;
+  if (isSupabaseMode) syncStatus = "保存中";
+  ui.retrySales = ui.retrySales.map((item) => (item.id === entry.id ? { ...item, attempts: Number(item.attempts || 0) + 1 } : item));
+  render();
+
+  try {
+    if (isSupabaseMode) {
+      state = await commitSaleToRemote(entry.sale);
+      state.currentUserId = authProfile?.id || state.currentUserId;
+    } else {
+      const result = applySaleToState(state, entry.sale);
+      if (!result.ok) throw new Error(result.message || "販売を保存できませんでした");
+      await saveState();
+    }
+
+    ui.retrySales = normalizeQueuedSalesSnapshot(ui.retrySales).filter((item) => item.id !== entry.id);
+    ui.recentSale = saleSummarySnapshot(entry.sale, "completed");
+    showToast(`未送信の販売を再送しました ${yen(entry.total)}`);
+  } catch (error) {
+    console.error("Failed to retry queued sale.", error);
+    if (isSupabaseMode) syncStatus = "保存失敗";
+    ui.retrySales = normalizeQueuedSalesSnapshot(ui.retrySales).map((item) =>
+      item.id === entry.id ? { ...item, lastError: String(error?.message || "再送に失敗しました") } : item,
+    );
+    showToast(remoteActionErrorMessage(error, "未送信販売の再送に失敗しました"), 7000);
+  } finally {
+    ui.saleSaving = false;
+    render();
+  }
+}
+
+function removeQueuedSale(saleId) {
+  ui.retrySales = normalizeQueuedSalesSnapshot(ui.retrySales).filter((entry) => entry.id !== saleId);
+  saveUiState();
+  showToast("未送信リストから削除しました");
+}
+
 function saleCommitErrorMessage(error) {
   const message = error?.message || "";
-  if (message.includes("Failed to fetch") || message.includes("NetworkError") || message.includes("fetch")) {
-    return "通信エラーのため販売を保存できませんでした。カートは残しています。接続を確認してもう一度確定してください";
+  if (isNetworkTransportError(error)) {
+    return "通信エラーのため販売を保存できませんでした。接続を確認してもう一度確定してください";
   }
   return `${message || "販売を保存できませんでした"}。カートは残しています`;
 }
 
 function remoteActionErrorMessage(error, fallback) {
   const message = error?.message || "";
-  if (message.includes("Failed to fetch") || message.includes("NetworkError") || message.includes("fetch")) {
+  if (isNetworkTransportError(error)) {
     return `通信エラーのため${fallback}。接続を確認してもう一度実行してください`;
   }
   if (isRemoteStateConflict(error)) {
@@ -2636,7 +3124,7 @@ function remoteActionErrorMessage(error, fallback) {
   return message || fallback;
 }
 
-async function cancelSale(saleId) {
+function openCancelSaleModal(saleId) {
   const sale = state.sales.find((item) => item.id === saleId);
   if (!sale || sale.status !== "completed") return;
   if (!canCancelSale(sale)) {
@@ -2644,8 +3132,24 @@ async function cancelSale(saleId) {
     return;
   }
 
-  const reason = prompt("取消理由を入力してください", "誤登録");
-  if (reason === null) return;
+  openConfirmModal({
+    type: "cancel-sale",
+    title: "販売を取消しますか？",
+    message: `${formatDateTime(sale.createdAt)} / ${yen(sale.total)} の販売を取消します。取消後、在庫は戻ります。`,
+    confirmLabel: "取消する",
+    tone: "danger",
+    payload: { saleId },
+  });
+}
+
+async function cancelSale(saleId, reason = "未入力") {
+  const sale = state.sales.find((item) => item.id === saleId);
+  if (!sale || sale.status !== "completed") return;
+  if (!canCancelSale(sale)) {
+    showToast("現在の権限では取消できません");
+    return;
+  }
+
   const cancelReason = reason.trim() || "未入力";
 
   if (isSupabaseMode) {
@@ -2686,8 +3190,23 @@ async function deleteCancelledSale(saleId) {
     return;
   }
 
-  const ok = confirm("取消済みの販売履歴を削除します。削除後はバックアップ以外から戻せません。よろしいですか？");
-  if (!ok) return;
+  openConfirmModal({
+    type: "delete-cancelled-sale",
+    title: "取消済み履歴を削除しますか？",
+    message: "削除後はバックアップ以外から戻せません。必要な場合は先にバックアップしてください。",
+    confirmLabel: "削除する",
+    tone: "danger",
+    payload: { saleId },
+  });
+}
+
+async function performDeleteCancelledSale(saleId) {
+  const sale = state.sales.find((item) => item.id === saleId);
+  if (!sale || sale.status !== "cancelled") return;
+  if (!canDeleteCancelledSale(sale)) {
+    showToast("現在の権限では削除できません");
+    return;
+  }
 
   if (isSupabaseMode) {
     try {
@@ -2714,6 +3233,7 @@ function addEvent(form) {
   const name = String(data.get("name")).trim();
   const date = String(data.get("date"));
   const venue = String(data.get("venue")).trim();
+  const sourceEventId = String(data.get("sourceEventId") || "");
 
   if (!name || !date || !venue) {
     showToast("イベント名、開催日、会場を入力してください");
@@ -2730,6 +3250,7 @@ function addEvent(form) {
   };
 
   state.events.push(event);
+  copyEventMerchSetup(sourceEventId, event.id);
   state.selectedEventId = event.id;
   ui.reportEventId = event.id;
   ui.category = "すべて";
@@ -2738,6 +3259,72 @@ function addEvent(form) {
   saveState();
   form.reset();
   showToast("イベントを追加しました");
+}
+
+function duplicateEvent(eventId) {
+  if (!can("manageEvents")) return;
+
+  const source = state.events.find((item) => item.id === eventId);
+  if (!source) return;
+
+  const event = {
+    id: uid("evt"),
+    name: `${source.name} コピー`,
+    date: source.date,
+    venue: source.venue,
+    status: "draft",
+    memo: source.memo || "",
+  };
+
+  state.events.push(event);
+  copyEventMerchSetup(source.id, event.id);
+  state.selectedEventId = event.id;
+  ui.reportEventId = event.id;
+  ui.category = "すべて";
+  ui.cart = [];
+  ui.cashReceived = "";
+  clearPendingSaleDraft();
+  saveState();
+  showToast("イベントを複製しました。開催日や名称を確認してください");
+}
+
+function copyEventMerchSetup(sourceEventId, targetEventId) {
+  const source = state.events.find((event) => event.id === sourceEventId);
+  if (!source || !targetEventId) {
+    for (const product of state.products) {
+      product.eventIds = [...new Set([...productEventIds(product), targetEventId])];
+      product.eventStatuses = {
+        ...(product.eventStatuses || {}),
+        [targetEventId]: "active",
+      };
+      for (const variant of product.variants) {
+        ensureInventory(targetEventId, variant.id, 0, inventoryFor(state.selectedEventId, variant.id)?.threshold ?? 5);
+      }
+    }
+    return;
+  }
+
+  for (const product of productsForEvent(source.id, true)) {
+    product.eventIds = [...new Set([...productEventIds(product), targetEventId])];
+    product.eventStatuses = {
+      ...(product.eventStatuses || {}),
+      [targetEventId]: productStatusForEvent(product, source.id),
+    };
+
+    for (const variant of product.variants) {
+      const sourceInventory = inventoryFor(source.id, variant.id);
+      const initial = Number(sourceInventory?.initial ?? sourceInventory?.current ?? 0);
+      const threshold = Number(sourceInventory?.threshold ?? 5);
+      state.inventories.push({
+        eventId: targetEventId,
+        variantId: variant.id,
+        initial,
+        current: initial,
+        threshold,
+        actual: null,
+      });
+    }
+  }
 }
 
 function saveEvent(eventId, row) {
@@ -2779,7 +3366,27 @@ function deleteEvent(eventId) {
   const relatedInventoryCount = state.inventories.filter((inventory) => inventory.eventId === event.id).length;
   const relatedProductCount = state.products.filter((product) => productEventIds(product).includes(event.id)).length;
   const message = `${event.name} を削除します。関連する販売履歴 ${relatedSalesCount}件、在庫データ ${relatedInventoryCount}件、イベント商品 ${relatedProductCount}件も削除されます。`;
-  if (!confirm(message)) return;
+
+  openConfirmModal({
+    type: "delete-event",
+    title: "イベントを削除しますか？",
+    message,
+    confirmLabel: "削除する",
+    tone: "danger",
+    payload: { eventId },
+  });
+}
+
+function performDeleteEvent(eventId) {
+  if (!can("manageEvents")) return;
+
+  const event = state.events.find((item) => item.id === eventId);
+  if (!event) return;
+
+  if (state.events.length <= 1) {
+    showToast("最後のイベントは削除できません");
+    return;
+  }
 
   state.products = state.products
     .map((product) => ({
@@ -2996,7 +3603,32 @@ function deleteProduct(productId, variantId) {
   const inventoryCount = state.inventories.filter((inventory) => inventory.eventId === event.id && variantIds.includes(inventory.variantId)).length;
   const adjustmentCount = state.adjustments.filter((adjustment) => adjustment.eventId === event.id && variantIds.includes(adjustment.variantId)).length;
   const message = `${event.name} から ${product.name} を削除します。関連する在庫データ ${inventoryCount}件、調整履歴 ${adjustmentCount}件も削除されます。`;
-  if (!confirm(message)) return;
+
+  openConfirmModal({
+    type: "delete-product",
+    title: "イベント商品を削除しますか？",
+    message,
+    confirmLabel: "削除する",
+    tone: "danger",
+    payload: { productId, variantId },
+  });
+}
+
+function performDeleteProduct(productId, variantId) {
+  if (!can("manageProducts")) return;
+
+  const product = state.products.find((item) => item.id === productId);
+  const variant = product?.variants.find((item) => item.id === variantId);
+  if (!product || !variant) return;
+
+  const event = getActiveEvent();
+  const saleCount = salesCountForProductEvent(product, event.id);
+  if (saleCount > 0) {
+    showToast("このイベントで販売履歴がある商品は削除できません。停止を使用してください");
+    return;
+  }
+
+  const variantIds = product.variants.map((item) => item.id);
 
   const remainingEventIds = productEventIds(product).filter((id) => id !== event.id);
   if (remainingEventIds.length === 0) {
@@ -3203,7 +3835,31 @@ async function deleteUser(userId) {
     return;
   }
 
-  if (!confirm(`${user.name} を削除します。販売履歴の担当者名は「不明」表示になります。`)) return;
+  openConfirmModal({
+    type: "delete-user",
+    title: "ユーザーを削除しますか？",
+    message: `${user.name} を削除します。販売履歴の担当者名は「不明」表示になります。`,
+    confirmLabel: isSupabaseMode ? "無効化する" : "削除する",
+    tone: "danger",
+    payload: { userId },
+  });
+}
+
+async function performDeleteUser(userId) {
+  if (!can("manageUsers")) return;
+
+  const user = state.users.find((item) => item.id === userId);
+  if (!user) return;
+
+  if (user.id === state.currentUserId) {
+    showToast("現在の操作ユーザーは削除できません");
+    return;
+  }
+
+  if (isLastActiveAdmin(user.id)) {
+    showToast("最後の有効な管理者は削除できません");
+    return;
+  }
 
   if (isSupabaseMode) {
     const { error } = await supabase.from("profiles").update({ active: false }).eq("id", user.id);
@@ -3257,37 +3913,54 @@ async function restoreDataFromFile(input) {
     const eventCount = restored.events.length;
     const saleCount = restored.sales.length;
 
-    if (!confirm(`バックアップを復元します。現在のローカルデータは置き換わります。\nイベント ${eventCount}件 / 販売履歴 ${saleCount}件`)) {
-      input.value = "";
-      return;
-    }
-
-    state = restored;
-    if (isSupabaseMode && authSession) {
-      const profiles = await fetchProfiles();
-      const profile = profiles.find((item) => item.id === authSession.user.id) || authProfile;
-      state.users = profiles.length ? profiles : state.users;
-      state.currentUserId = profile?.id || authSession.user.id;
-      authProfile = profile || authProfile;
-    }
-    ui = {
-      ...ui,
-      cart: [],
-      paymentMethod: CASH_METHOD,
-      cashReceived: "",
-      search: "",
-      category: "すべて",
-      historyQuery: "",
-      reportEventId: state.selectedEventId,
-    };
-    saveState();
-    input.value = "";
-    showToast("バックアップから復元しました");
+    pendingRestoreSnapshot = { state: restored, inputId: input.id };
+    openConfirmModal({
+      type: "restore-data",
+      title: "バックアップを復元しますか？",
+      message: `現在のデータは選択したバックアップで置き換わります。\nイベント ${eventCount}件 / 販売履歴 ${saleCount}件`,
+      confirmLabel: "復元する",
+      tone: "danger",
+    });
   } catch (error) {
     console.warn("Failed to restore backup.", error);
     input.value = "";
     showToast("復元できませんでした。JSONファイルを確認してください");
   }
+}
+
+async function performRestoreData() {
+  const restored = pendingRestoreSnapshot?.state;
+  const inputId = pendingRestoreSnapshot?.inputId;
+  pendingRestoreSnapshot = null;
+  if (!restored) return;
+
+  state = restored;
+  if (isSupabaseMode && authSession) {
+    const profiles = await fetchProfiles();
+    const profile = profiles.find((item) => item.id === authSession.user.id) || authProfile;
+    state.users = profiles.length ? profiles : state.users;
+    state.currentUserId = profile?.id || authSession.user.id;
+    authProfile = profile || authProfile;
+  }
+  ui = {
+    ...ui,
+    cart: [],
+    paymentMethod: CASH_METHOD,
+    cashReceived: "",
+    search: "",
+    category: "すべて",
+    historyQuery: "",
+    reportEventId: state.selectedEventId,
+    pendingSaleId: "",
+    retrySales: [],
+    recentSale: null,
+  };
+  await saveState();
+  if (inputId) {
+    const input = document.getElementById(inputId);
+    if (input) input.value = "";
+  }
+  showToast("バックアップから復元しました");
 }
 
 async function adjustStock(form) {
@@ -3482,6 +4155,10 @@ function userById(userId) {
   return state.users.find((user) => user.id === userId);
 }
 
+function eventNameById(eventId) {
+  return state.events.find((event) => event.id === eventId)?.name || "削除済みイベント";
+}
+
 function normalizeCode(value) {
   return String(value).trim().toUpperCase();
 }
@@ -3540,6 +4217,11 @@ function salesCountForProductEvent(product, eventId) {
 
 function activeAdminUsers() {
   return state.users.filter((user) => user.active && user.role === "admin");
+}
+
+function pendingApprovalUsers() {
+  if (!isSupabaseMode) return [];
+  return state.users.filter((user) => !user.active);
 }
 
 function isLastActiveAdmin(userId) {
@@ -3728,6 +4410,10 @@ function cashChangeDue(total = cartTotal()) {
 function canConfirmCurrentSale(event) {
   if (ui.saleSaving) return false;
   if (!can("sell") || event.status !== "open" || ui.cart.length === 0) return false;
+  if (ui.cart.some((line) => {
+    const row = catalogRowByVariant(line.variantId);
+    return !row || row.inventory.current < line.quantity;
+  })) return false;
   if (ui.paymentMethod !== CASH_METHOD) return true;
   const change = cashChangeDue();
   return change !== null && change >= 0;
@@ -3736,7 +4422,12 @@ function canConfirmCurrentSale(event) {
 function saleBlockingNotice(event, total = cartTotal()) {
   if (event.status !== "open") return "このイベントは販売登録できる状態ではありません。";
   if (!can("sell")) return "現在の権限では販売登録できません。";
-  if (ui.paymentMethod !== CASH_METHOD || ui.cart.length === 0) return "";
+  if (ui.cart.length === 0) return "商品をカートに追加してください。";
+  if (ui.cart.some((line) => {
+    const row = catalogRowByVariant(line.variantId);
+    return !row || row.inventory.current < line.quantity;
+  })) return "在庫不足の商品があります。数量を確認してください。";
+  if (ui.paymentMethod !== CASH_METHOD) return "";
   if (cashReceivedAmount() === null) return "受取金額を入力してください。";
   const change = cashChangeDue(total);
   if (change !== null && change < 0) return `受取金額が${yen(Math.abs(change))}不足しています。`;
@@ -3896,6 +4587,7 @@ function icon(name) {
     play: `<path d="M8 5v14l11-7-11-7z"/>`,
     lock: `<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>`,
     logout: `<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>`,
+    copy: `<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>`,
   };
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.check}</svg>`;
 }
