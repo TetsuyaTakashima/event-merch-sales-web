@@ -1270,7 +1270,7 @@ th.numeric {
   }
 
   .content {
-    padding: 16px 16px 92px;
+    padding: 16px 16px 112px;
   }
 
   .form-grid,
@@ -1516,11 +1516,24 @@ th.numeric {
     padding: 10px;
     background: rgba(255, 255, 255, 0.96);
     box-shadow: 0 18px 46px rgba(23, 33, 30, 0.22);
+    display: grid;
+    gap: 10px;
+    backdrop-filter: blur(10px);
+  }
+
+  .mobile-checkout-bar.has-cash-controls {
+    min-height: 150px;
+  }
+
+  body:has(.mobile-checkout-bar.has-cash-controls) .content {
+    padding-bottom: 190px;
+  }
+
+  .mobile-checkout-main {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    backdrop-filter: blur(10px);
   }
 
   .mobile-checkout-meta {
@@ -1545,6 +1558,68 @@ th.numeric {
     min-width: 122px;
     min-height: 48px;
     padding: 0 12px;
+  }
+
+  .mobile-cash-controls {
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    padding: 8px;
+    background: #fbfcfa;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(86px, 0.45fr);
+    gap: 6px 8px;
+    align-items: end;
+  }
+
+  .mobile-cash-controls label {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .mobile-cash-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .mobile-cash-input-row .input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .mobile-cash-input-row .button {
+    min-width: 92px;
+    min-height: 44px;
+    padding: 0 10px;
+  }
+
+  .mobile-cash-result {
+    min-height: 44px;
+    border-radius: 10px;
+    padding: 6px 8px;
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+    display: grid;
+    align-content: center;
+    gap: 2px;
+    text-align: right;
+  }
+
+  .mobile-cash-result.is-short {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+
+  .mobile-cash-result span {
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  .mobile-cash-result strong {
+    font-size: 18px;
+    line-height: 1.1;
   }
 
   .modal-backdrop {
@@ -1683,6 +1758,10 @@ th.numeric {
 
   .cash-grid {
     grid-template-columns: 1fr;
+  }
+
+  .cart .cash-panel {
+    display: none;
   }
 
   .toolbar-left,

@@ -1399,17 +1399,42 @@ function renderMobileCheckoutBar(total, canConfirm, confirmLabel, blockingNotice
   const itemCount = ui.cart.reduce((sum, line) => sum + line.quantity, 0);
   const queueLabel = ui.retrySales.length ? `未送信 ${ui.retrySales.length}件` : syncStatus;
   const buttonLabel = itemCount === 0 ? "商品を選択" : canConfirm ? confirmLabel : "確認する";
+  const showCashControls = ui.paymentMethod === CASH_METHOD;
 
   return `
-    <div class="mobile-checkout-bar">
-      <div class="mobile-checkout-meta">
-        <span>${itemCount}点 / ${escapeHtml(queueLabel || "保存待機")}</span>
-        <strong>${yen(total)}</strong>
-        ${blockingNotice ? `<small>${escapeHtml(blockingNotice)}</small>` : ""}
+    <div class="mobile-checkout-bar ${showCashControls ? "has-cash-controls" : ""}">
+      ${showCashControls ? renderMobileCashControls(total) : ""}
+      <div class="mobile-checkout-main">
+        <div class="mobile-checkout-meta">
+          <span>${itemCount}点 / ${escapeHtml(queueLabel || "保存待機")}</span>
+          <strong>${yen(total)}</strong>
+          ${blockingNotice ? `<small>${escapeHtml(blockingNotice)}</small>` : ""}
+        </div>
+        <button class="button ${!canConfirm ? "is-soft-disabled" : ""}" data-action="confirm-sale" type="button" aria-disabled="${canConfirm ? "false" : "true"}" ${ui.saleSaving ? "disabled" : ""}>
+          ${icon("check")}${buttonLabel}
+        </button>
       </div>
-      <button class="button ${!canConfirm ? "is-soft-disabled" : ""}" data-action="confirm-sale" type="button" aria-disabled="${canConfirm ? "false" : "true"}" ${ui.saleSaving ? "disabled" : ""}>
-        ${icon("check")}${buttonLabel}
-      </button>
+    </div>
+  `;
+}
+
+function renderMobileCashControls(total) {
+  const received = cashReceivedAmount();
+  const change = cashChangeDue(total);
+  const displayChange = received === null ? "-" : yen(Math.max(change, 0));
+  const shortage = received !== null && change < 0;
+
+  return `
+    <div class="mobile-cash-controls">
+      <label for="cash-received-mobile">受取金額</label>
+      <div class="mobile-cash-input-row">
+        <input id="cash-received-mobile" class="input" data-action="cash-received" type="number" min="0" step="1" inputmode="numeric" value="${escapeAttribute(ui.cashReceived)}" placeholder="受取金額">
+        <button class="button secondary" data-action="cash-exact" type="button" ${total <= 0 ? "disabled" : ""}>${icon("check")}ちょうど</button>
+      </div>
+      <div class="mobile-cash-result ${shortage ? "is-short" : ""}">
+        <span>${shortage ? "不足" : "おつり"}</span>
+        <strong>${shortage ? yen(Math.abs(change)) : displayChange}</strong>
+      </div>
     </div>
   `;
 }
