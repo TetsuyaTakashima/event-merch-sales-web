@@ -516,6 +516,22 @@ button:disabled {
   transform: translateY(-1px);
 }
 
+.product-card.is-in-cart {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.14), 0 14px 26px rgba(23, 33, 30, 0.08);
+}
+
+.product-card.is-in-cart:not(:disabled):hover {
+  border-color: var(--accent-dark);
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.2), 0 8px 20px rgba(23, 33, 30, 0.1);
+}
+
+.product-card.is-in-cart .product-card-add {
+  background: var(--accent);
+  color: #fff;
+}
+
 .product-card:not(:disabled):active {
   transform: translateY(0);
   background: var(--accent-soft);
