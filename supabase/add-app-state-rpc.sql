@@ -386,31 +386,33 @@ begin
     end if;
   end if;
 
-  for sale_item in
-    select value from jsonb_array_elements(coalesce(sale_record->'items', '[]'::jsonb)) as items(value)
-  loop
-    quantity := floor(coalesce(nullif(sale_item->>'quantity', ''), '0')::numeric)::integer;
+  if coalesce((sale_record->>'stockAdjusted')::boolean, true) then
+    for sale_item in
+      select value from jsonb_array_elements(coalesce(sale_record->'items', '[]'::jsonb)) as items(value)
+    loop
+      quantity := floor(coalesce(nullif(sale_item->>'quantity', ''), '0')::numeric)::integer;
 
-    select (ordinality - 1)::integer, value
-    into inventory_index, inventory_record
-    from jsonb_array_elements(coalesce(current_data->'inventories', '[]'::jsonb)) with ordinality as inventories(value, ordinality)
-    where value->>'eventId' = sale_record->>'eventId'
-      and value->>'variantId' = sale_item->>'variantId'
-    limit 1;
+      select (ordinality - 1)::integer, value
+      into inventory_index, inventory_record
+      from jsonb_array_elements(coalesce(current_data->'inventories', '[]'::jsonb)) with ordinality as inventories(value, ordinality)
+      where value->>'eventId' = sale_record->>'eventId'
+        and value->>'variantId' = sale_item->>'variantId'
+      limit 1;
 
-    if inventory_record is null then
-      raise exception '在庫データが見つかりません'
-        using errcode = '22023';
-    end if;
+      if inventory_record is null then
+        raise exception '在庫データが見つかりません'
+          using errcode = '22023';
+      end if;
 
-    current_stock := floor(coalesce(nullif(inventory_record->>'current', ''), '0')::numeric)::integer;
-    current_data := jsonb_set(
-      current_data,
-      array['inventories', inventory_index::text, 'current'],
-      to_jsonb(current_stock + quantity),
-      false
-    );
-  end loop;
+      current_stock := floor(coalesce(nullif(inventory_record->>'current', ''), '0')::numeric)::integer;
+      current_data := jsonb_set(
+        current_data,
+        array['inventories', inventory_index::text, 'current'],
+        to_jsonb(current_stock + quantity),
+        false
+      );
+    end loop;
+  end if;
 
   sale_record := sale_record || jsonb_build_object(
     'status', 'cancelled',

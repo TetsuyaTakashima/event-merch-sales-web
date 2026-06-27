@@ -975,6 +975,10 @@ table {
   min-width: 1080px;
 }
 
+.pre-system-sales-table {
+  min-width: 940px;
+}
+
 .products-table {
   min-width: 1180px;
 }
@@ -1124,6 +1128,52 @@ th.numeric {
 
 .form-grid.user-create-grid {
   grid-template-columns: repeat(5, minmax(150px, 1fr)) auto;
+}
+
+.form-grid.pre-system-sales-options {
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) minmax(150px, auto);
+}
+
+.check-field {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.check-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.pre-system-qty-input {
+  width: 120px;
+  min-width: 120px;
+  margin-left: auto;
+  text-align: right;
+}
+
+.pre-system-sales-footer {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: #fbfcfa;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pre-system-sales-footer > div {
+  display: grid;
+  gap: 3px;
+}
+
+.pre-system-sales-footer strong {
+  font-size: 20px;
 }
 
 .inline-form {
@@ -1276,7 +1326,8 @@ th.numeric {
   .form-grid,
   .form-grid.three,
   .form-grid.two,
-  .form-grid.user-create-grid {
+  .form-grid.user-create-grid,
+  .form-grid.pre-system-sales-options {
     grid-template-columns: 1fr;
   }
 
@@ -1419,6 +1470,25 @@ th.numeric {
   .mobile-card-table .row-actions .button {
     min-height: 38px;
     padding: 0 8px;
+  }
+
+  .pre-system-sales-table {
+    min-width: 0;
+  }
+
+  .pre-system-qty-input {
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .pre-system-sales-footer {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .pre-system-sales-footer .button {
+    width: 100%;
   }
 
   .sales-table td[data-label="商品"],

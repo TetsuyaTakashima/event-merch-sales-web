@@ -1595,7 +1595,10 @@ function renderSalesTable(sales, withActions) {
               (sale) => `
                 <tr>
                   <td data-label="日時">${formatDateTime(sale.createdAt)}</td>
-                  <td data-label="商品">${escapeHtml(sale.items.map((item) => `${item.name}/${item.variantName} x${item.quantity}`).join("、"))}</td>
+                  <td data-label="商品">
+                    ${escapeHtml(sale.items.map((item) => `${item.name}/${item.variantName} x${item.quantity}`).join("、"))}
+                    ${sale.source === "pre-system" ? `<div class="muted">導入前販売${sale.memo ? ` / ${escapeHtml(sale.memo)}` : ""}${sale.stockAdjusted === false ? " / 在庫反映なし" : ""}</div>` : ""}
+                  </td>
                   <td data-label="担当">${escapeHtml(userById(sale.userId)?.name ?? "不明")}</td>
                   <td data-label="決済">${renderPaymentCell(sale)}</td>
                   <td class="numeric" data-label="金額">${yen(sale.total)}</td>
@@ -1883,6 +1886,7 @@ function renderEvents() {
         </div>
       </div>
     </section>
+    ${renderPreSystemSalesImport(canManage)}
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -1915,6 +1919,103 @@ function renderEvents() {
         </form>
       </div>
     </section>
+  `;
+}
+
+function renderPreSystemSalesImport(canManage) {
+  const event = getActiveEvent();
+  const rows = catalogRows(true, event.id);
+  const defaultDate = event.date || dateInputValue();
+
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>導入前販売の一括入力</h2>
+          <p>${escapeHtml(event.name)}で、システム利用前に売れていた数量をまとめて登録</p>
+        </div>
+        <span class="status info">販売履歴・集計に反映</span>
+      </div>
+      <div class="panel-body stack">
+        <div class="notice">
+          イベント開始時の初期在庫を入れている場合は「在庫も減らす」をONにしてください。すでに現在庫を減らして登録済みの場合はOFFにできます。
+        </div>
+        ${
+          rows.length
+            ? `
+              <form class="stack" data-action="register-pre-system-sales">
+                <div class="form-grid pre-system-sales-options">
+                  <div class="field">
+                    <label for="pre-system-date">販売日</label>
+                    <input id="pre-system-date" class="input" name="date" type="date" value="${escapeAttribute(defaultDate)}" required ${!canManage ? "disabled" : ""}>
+                  </div>
+                  <div class="field">
+                    <label for="pre-system-time">時刻</label>
+                    <input id="pre-system-time" class="input" name="time" type="time" value="09:00" required ${!canManage ? "disabled" : ""}>
+                  </div>
+                  <div class="field">
+                    <label for="pre-system-payment">決済方法</label>
+                    <select id="pre-system-payment" class="select" name="paymentMethod" ${!canManage ? "disabled" : ""}>
+                      ${paymentMethods.map((method) => `<option value="${escapeAttribute(method)}" ${method === CASH_METHOD ? "selected" : ""}>${escapeHtml(method)}</option>`).join("")}
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="pre-system-note">メモ</label>
+                    <input id="pre-system-note" class="input" name="memo" value="導入前販売" ${!canManage ? "disabled" : ""}>
+                  </div>
+                  <label class="check-field">
+                    <input type="checkbox" name="reduceStock" checked ${!canManage ? "disabled" : ""}>
+                    <span>在庫も減らす</span>
+                  </label>
+                </div>
+                <div class="table-wrap">
+                  <table class="mobile-card-table pre-system-sales-table">
+                    <thead>
+                      <tr>
+                        <th>商品</th>
+                        <th>SKU</th>
+                        <th class="numeric">単価</th>
+                        <th class="numeric">現在庫</th>
+                        <th class="numeric">導入前に売れた数</th>
+                        <th class="numeric">小計</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${rows.map((row) => renderPreSystemSaleRow(row, canManage)).join("")}
+                    </tbody>
+                  </table>
+                </div>
+                <div class="pre-system-sales-footer">
+                  <div>
+                    <span class="muted">入力合計</span>
+                    <strong data-pre-system-total>0点 / ￥0</strong>
+                  </div>
+                  <button class="button" type="submit" ${!canManage ? "disabled" : ""}>${icon("plus")}導入前販売を登録</button>
+                </div>
+              </form>
+            `
+            : `<div class="empty">このイベントに商品がありません。先に商品を登録してください。</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderPreSystemSaleRow(row, canManage) {
+  return `
+    <tr data-pre-system-row data-price="${row.variant.price}">
+      <td data-label="商品">
+        <strong>${escapeHtml(row.product.name)} / ${escapeHtml(row.variant.name)}</strong>
+        <div class="muted">${escapeHtml(row.product.category)} / ${escapeHtml(row.product.code)}</div>
+      </td>
+      <td data-label="SKU">${escapeHtml(row.variant.sku)}</td>
+      <td class="numeric" data-label="単価">${yen(row.variant.price)}</td>
+      <td class="numeric" data-label="現在庫"><span class="status ${row.inventory.current <= row.inventory.threshold ? "low" : "active"}">${row.inventory.current}</span></td>
+      <td class="numeric" data-label="導入前に売れた数">
+        <input class="input table-input pre-system-qty-input" data-action="pre-system-sale-quantity" name="preSold-${escapeAttribute(row.variant.id)}" type="number" min="0" step="1" value="0" ${!canManage ? "disabled" : ""}>
+      </td>
+      <td class="numeric" data-label="小計"><strong data-pre-system-subtotal>￥0</strong></td>
+    </tr>
   `;
 }
 
@@ -2507,6 +2608,10 @@ function handleInput(event) {
     clearPendingSaleDraft();
     render();
   }
+
+  if (action === "pre-system-sale-quantity") {
+    updatePreSystemSalePreview(target.closest('form[data-action="register-pre-system-sales"]'));
+  }
 }
 
 function handleChange(event) {
@@ -2556,6 +2661,7 @@ function handleSubmit(event) {
   const action = form.dataset.action;
   if (action === "auth-form") handleAuth(form);
   if (action === "add-event") addEvent(form);
+  if (action === "register-pre-system-sales") registerPreSystemSales(form);
   if (action === "add-product") addProduct(form);
   if (action === "link-product-event") linkProductToEvent(form);
   if (action === "add-user") addUser(form);
@@ -3177,6 +3283,16 @@ async function cancelSale(saleId, reason = "未入力") {
 
   const cancelReason = reason.trim() || "未入力";
 
+  if (isSupabaseMode && sale.source === "pre-system" && sale.stockAdjusted === false) {
+    sale.status = "cancelled";
+    sale.cancelReason = cancelReason;
+    sale.cancelledAt = new Date().toISOString();
+    await saveState();
+    showToast("販売を取消しました");
+    render();
+    return;
+  }
+
   if (isSupabaseMode) {
     try {
       await runRemoteStateRpc("cancel_sale", {
@@ -3198,9 +3314,11 @@ async function cancelSale(saleId, reason = "未入力") {
   sale.cancelReason = cancelReason;
   sale.cancelledAt = new Date().toISOString();
 
-  for (const item of sale.items) {
-    const inventory = inventoryFor(sale.eventId, item.variantId);
-    if (inventory) inventory.current += item.quantity;
+  if (sale.stockAdjusted !== false) {
+    for (const item of sale.items) {
+      const inventory = inventoryFor(sale.eventId, item.variantId);
+      if (inventory) inventory.current += item.quantity;
+    }
   }
 
   saveState();
@@ -3350,6 +3468,139 @@ function copyEventMerchSetup(sourceEventId, targetEventId) {
       });
     }
   }
+}
+
+function updatePreSystemSalePreview(form) {
+  if (!form) return;
+  let quantity = 0;
+  let total = 0;
+
+  form.querySelectorAll("[data-pre-system-row]").forEach((row) => {
+    const price = Number(row.dataset.price || 0);
+    const input = row.querySelector('[data-action="pre-system-sale-quantity"]');
+    const count = Math.max(0, Math.floor(Number(input?.value || 0)));
+    const subtotal = price * count;
+    quantity += count;
+    total += subtotal;
+    const subtotalNode = row.querySelector("[data-pre-system-subtotal]");
+    if (subtotalNode) subtotalNode.textContent = yen(subtotal);
+  });
+
+  const totalNode = form.querySelector("[data-pre-system-total]");
+  if (totalNode) totalNode.textContent = `${quantity}点 / ${yen(total)}`;
+}
+
+async function registerPreSystemSales(form) {
+  if (!can("manageEvents")) return;
+
+  const event = getActiveEvent();
+  const data = new FormData(form);
+  const reduceStock = data.get("reduceStock") === "on";
+  const paymentMethod = paymentMethods.includes(String(data.get("paymentMethod"))) ? String(data.get("paymentMethod")) : CASH_METHOD;
+  const memo = String(data.get("memo") || "導入前販売").trim() || "導入前販売";
+  const date = String(data.get("date") || event.date || dateInputValue());
+  const time = String(data.get("time") || "09:00");
+  const createdAtDate = new Date(`${date}T${time}`);
+  if (Number.isNaN(createdAtDate.getTime())) {
+    showToast("販売日と時刻を確認してください");
+    return;
+  }
+  const createdAt = createdAtDate.toISOString();
+  const rows = catalogRows(true, event.id);
+  const items = [];
+
+  for (const row of rows) {
+    const raw = String(data.get(`preSold-${row.variant.id}`) ?? "0");
+    const quantity = Math.floor(Number(raw || 0));
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      showToast("数量は0以上の整数で入力してください");
+      return;
+    }
+    if (quantity === 0) continue;
+    if (reduceStock && row.inventory.current < quantity) {
+      showToast(`${row.product.name} / ${row.variant.name} の数量が現在庫を超えています`);
+      return;
+    }
+    items.push({
+      productId: row.product.id,
+      variantId: row.variant.id,
+      name: row.product.name,
+      variantName: row.variant.name,
+      quantity,
+      unitPrice: row.variant.price,
+      subtotal: row.variant.price * quantity,
+    });
+  }
+
+  if (items.length === 0) {
+    showToast("導入前に売れた数量を1つ以上入力してください");
+    return;
+  }
+
+  const sale = {
+    id: uid("sale"),
+    eventId: event.id,
+    userId: state.currentUserId,
+    createdAt,
+    paymentMethod,
+    cashReceived: null,
+    changeDue: null,
+    status: "completed",
+    total: items.reduce((sum, item) => sum + item.subtotal, 0),
+    items,
+    cancelledAt: "",
+    cancelReason: "",
+    source: "pre-system",
+    memo,
+    stockAdjusted: reduceStock,
+  };
+
+  const result = applyPreSystemSaleToState(state, sale, { reduceStock });
+  if (!result.ok) {
+    showToast(result.message || "導入前販売を登録できませんでした");
+    return;
+  }
+
+  try {
+    await saveState();
+    form.reset();
+    updatePreSystemSalePreview(form);
+    showToast(`導入前販売を登録しました ${items.reduce((sum, item) => sum + item.quantity, 0)}点 / ${yen(sale.total)}`);
+    render();
+  } catch (error) {
+    console.error("Failed to register pre-system sales.", error);
+    if (isSupabaseMode) syncStatus = "保存失敗";
+    showToast(remoteActionErrorMessage(error, "導入前販売の登録に失敗しました"), 7000);
+    render();
+  }
+}
+
+function applyPreSystemSaleToState(targetState, sale, { reduceStock = true } = {}) {
+  if (targetState.sales.some((item) => item.id === sale.id)) {
+    return { ok: true, alreadyApplied: true };
+  }
+
+  const event = targetState.events.find((item) => item.id === sale.eventId);
+  if (!event) {
+    return { ok: false, message: "対象イベントが見つかりません" };
+  }
+
+  if (reduceStock) {
+    for (const item of sale.items) {
+      const inventory = inventoryInState(targetState, sale.eventId, item.variantId);
+      if (!inventory || inventory.current < item.quantity) {
+        return { ok: false, message: "現在庫を超える商品があります。数量を確認してください" };
+      }
+    }
+
+    for (const item of sale.items) {
+      const inventory = inventoryInState(targetState, sale.eventId, item.variantId);
+      inventory.current -= item.quantity;
+    }
+  }
+
+  targetState.sales.push(sale);
+  return { ok: true, alreadyApplied: false };
 }
 
 function saveEvent(eventId, row) {
@@ -4555,6 +4806,15 @@ function yen(value) {
     currency: "JPY",
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function dateInputValue(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return new Date().toISOString().slice(0, 10);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function formatDate(date) {
