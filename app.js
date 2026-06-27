@@ -1137,14 +1137,18 @@ function renderProductCard(row) {
   const stock = inventoryFor(getActiveEvent().id, row.variant.id)?.current ?? 0;
   const disabled = stock <= 0 || getActiveEvent().status !== "open" || !can("sell");
   const cartQuantity = ui.cart.find((line) => line.variantId === row.variant.id)?.quantity || 0;
-  const productLabel = `${row.product.name} ${row.variant.name}、${yen(row.variant.price)}、${disabled ? "追加できません" : "カートに追加"}`;
+  const inCart = cartQuantity > 0;
+  const cardClassName = ["product-card", disabled ? "is-disabled" : "", inCart ? "is-in-cart" : ""].filter(Boolean).join(" ");
+  const productActionLabel = disabled ? "追加できません" : inCart ? `カート内 ${cartQuantity}点、さらに追加` : "カートに追加";
+  const productLabel = `${row.product.name} ${row.variant.name}、${yen(row.variant.price)}、${productActionLabel}`;
   return `
     <button
-      class="product-card ${disabled ? "is-disabled" : ""}"
+      class="${cardClassName}"
       data-action="add-cart"
       data-variant-id="${row.variant.id}"
       type="button"
       aria-label="${escapeAttribute(productLabel)}"
+      aria-pressed="${inCart ? "true" : "false"}"
       ${disabled ? "disabled" : ""}
     >
       <span class="product-top">
