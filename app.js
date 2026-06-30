@@ -766,6 +766,8 @@ function render() {
     selectionEnd = null;
   }
 
+  ensureSelectedEventIsSelectableForCurrentUser();
+
   app.innerHTML = shell(renderView());
   bindAppEvents(app);
 
@@ -885,7 +887,17 @@ function renderPendingApproval() {
 }
 
 function renderEventOptions(activeEventId = state.selectedEventId) {
-  return state.events.map((event) => `<option value="${event.id}" ${event.id === activeEventId ? "selected" : ""}>${escapeHtml(event.name)}</option>`).join("");
+  const events = selectableEventsForCurrentUser();
+  if (events.length === 0) {
+    return `<option value="" selected disabled>販売中のイベントがありません</option>`;
+  }
+
+  return events
+    .map((event) => {
+      const label = canManageEventStatus() ? `${event.name}（${eventStatusLabel(event.status)}）` : event.name;
+      return `<option value="${event.id}" ${event.id === activeEventId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
 }
 
 function renderUserOptions() {
@@ -2021,6 +2033,8 @@ function renderPreSystemSaleRow(row, canManage) {
 
 function renderEventRow(event, canManage) {
   const deleteDisabled = !canManage || state.events.length <= 1;
+  const canSelect = canSelectEvent(event);
+  const canChangeStatus = canManageEventStatus();
 
   return `
     <tr data-event-row="${event.id}">
@@ -2039,14 +2053,16 @@ function renderEventRow(event, canManage) {
       <td data-label="状態"><span class="status ${event.status === "closed" ? "closed" : event.status === "open" ? "open" : "info"}">${eventStatusLabel(event.status)}</span></td>
       <td data-label="操作">
         <div class="row-actions">
-          <button class="button secondary" data-action="activate-event" data-event-id="${event.id}" type="button">${icon("check")}選択</button>
+          <button class="button secondary" data-action="activate-event" data-event-id="${event.id}" type="button" ${!canSelect ? "disabled" : ""}>${icon("check")}選択</button>
           <button class="button secondary" data-action="save-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("save")}保存</button>
           <button class="button secondary" data-action="duplicate-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("copy")}複製</button>
-          <button class="button secondary" data-action="set-event-status" data-event-id="${event.id}" data-status="open" type="button" ${!canManage ? "disabled" : ""}>${icon("play")}販売中</button>
-          <button class="button warning" data-action="set-event-status" data-event-id="${event.id}" data-status="closed" type="button" ${!can("closeEvent") ? "disabled" : ""}>${icon("lock")}終了</button>
+          <button class="button secondary" data-action="set-event-status" data-event-id="${event.id}" data-status="open" type="button" ${!canChangeStatus ? "disabled" : ""}>${icon("play")}販売中</button>
+          <button class="button warning" data-action="set-event-status" data-event-id="${event.id}" data-status="closed" type="button" ${!canChangeStatus ? "disabled" : ""}>${icon("lock")}中止</button>
           <button class="button danger" data-action="delete-event" data-event-id="${event.id}" type="button" ${deleteDisabled ? "disabled" : ""}>${icon("trash")}削除</button>
         </div>
         ${state.events.length <= 1 ? `<div class="muted">最後のイベントは削除できません</div>` : ""}
+        ${!canSelect && !canManageEventStatus() ? `<div class="muted">販売中のイベントのみ選択できます</div>` : ""}
+        ${!canChangeStatus ? `<div class="muted">販売状態の変更は管理者のみ可能です</div>` : ""}
       </td>
     </tr>
   `;
@@ -2629,6 +2645,7 @@ function handleChange(event) {
 
   if (action === "select-user") {
     state.currentUserId = target.value;
+    ensureSelectedEventIsSelectableForCurrentUser();
     if (!isSupabaseMode) saveState();
     render();
   }
@@ -2972,6 +2989,10 @@ function requestEventSwitch(eventId) {
     render();
     return;
   }
+  if (!canSelectEvent(nextEvent)) {
+    showToast("販売中のイベントのみ選択できます");
+    return;
+  }
 
   const itemCount = ui.cart.reduce((sum, line) => sum + line.quantity, 0);
   if (itemCount > 0) {
@@ -2990,7 +3011,8 @@ function requestEventSwitch(eventId) {
 }
 
 function applyEventSwitch(eventId) {
-  if (!state.events.some((event) => event.id === eventId)) return;
+  const event = state.events.find((item) => item.id === eventId);
+  if (!event || !canSelectEvent(event)) return;
   state.selectedEventId = eventId;
   ui.reportEventId = eventId;
   ui.category = "すべて";
@@ -4331,8 +4353,11 @@ async function saveActualStock(form) {
 }
 
 function setEventStatus(eventId, status) {
-  if (status === "closed" && !can("closeEvent")) return;
-  if (status !== "closed" && !can("manageEvents")) return;
+  if (!canManageEventStatus()) {
+    showToast("販売状態の変更は管理者のみ可能です");
+    return;
+  }
+  if (!["open", "closed"].includes(status)) return;
 
   const event = state.events.find((item) => item.id === eventId);
   if (!event) return;
@@ -4433,6 +4458,36 @@ function userById(userId) {
 
 function eventNameById(eventId) {
   return state.events.find((event) => event.id === eventId)?.name || "削除済みイベント";
+}
+
+function canManageEventStatus() {
+  const user = getCurrentUser();
+  return Boolean(user?.active && user.role === "admin");
+}
+
+function canSelectEvent(event) {
+  if (!event) return false;
+  return canManageEventStatus() || event.status === "open";
+}
+
+function selectableEventsForCurrentUser() {
+  if (canManageEventStatus()) return state.events;
+  return state.events.filter((event) => event.status === "open");
+}
+
+function ensureSelectedEventIsSelectableForCurrentUser() {
+  const current = getActiveEvent();
+  if (canSelectEvent(current)) return;
+
+  const next = selectableEventsForCurrentUser()[0];
+  if (!next) return;
+
+  state.selectedEventId = next.id;
+  ui.reportEventId = next.id;
+  ui.category = "すべて";
+  ui.cart = [];
+  ui.cashReceived = "";
+  clearPendingSaleDraft();
 }
 
 function normalizeCode(value) {
@@ -4717,7 +4772,7 @@ function canRestoreSelection(element) {
 
 function eventStatusLabel(status) {
   if (status === "open") return "販売中";
-  if (status === "closed") return "終了";
+  if (status === "closed") return "中止";
   return "準備中";
 }
 
