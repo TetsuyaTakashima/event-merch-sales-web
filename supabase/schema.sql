@@ -6,14 +6,28 @@ create table if not exists public.profiles (
   name text not null,
   role text not null default 'staff',
   active boolean not null default true,
+  account_status text not null default 'active',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.profiles
+  add column if not exists account_status text not null default 'active';
 
 alter table public.profiles drop constraint if exists profiles_role_check;
 alter table public.profiles
   add constraint profiles_role_check
   check (role in ('admin', 'manager', 'staff', 'tester', 'viewer'));
+
+update public.profiles
+set account_status = case when active then 'active' else 'pending' end
+where account_status is null
+   or account_status not in ('pending', 'active', 'suspended');
+
+alter table public.profiles drop constraint if exists profiles_account_status_check;
+alter table public.profiles
+  add constraint profiles_account_status_check
+  check (account_status in ('pending', 'active', 'suspended'));
 
 create table if not exists public.app_state (
   id text primary key,
@@ -57,6 +71,7 @@ as $$
     from public.profiles
     where id = auth.uid()
       and active = true
+      and account_status = 'active'
   );
 $$;
 
@@ -73,6 +88,7 @@ as $$
     where id = auth.uid()
       and role = 'admin'
       and active = true
+      and account_status = 'active'
   );
 $$;
 
@@ -89,6 +105,7 @@ as $$
     where id = auth.uid()
       and role in ('admin', 'manager')
       and active = true
+      and account_status = 'active'
   );
 $$;
 
@@ -103,13 +120,14 @@ declare
 begin
   select not exists (select 1 from public.profiles) into first_user;
 
-  insert into public.profiles (id, email, name, role, active)
+  insert into public.profiles (id, email, name, role, active, account_status)
   values (
     new.id,
     new.email,
     coalesce(nullif(new.raw_user_meta_data->>'name', ''), split_part(new.email, '@', 1), 'スタッフ'),
     case when first_user then 'admin' else 'staff' end,
-    first_user
+    first_user,
+    case when first_user then 'active' else 'pending' end
   )
   on conflict (id) do nothing;
 

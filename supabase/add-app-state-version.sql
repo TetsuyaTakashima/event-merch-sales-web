@@ -19,6 +19,7 @@ as $$
     where id = auth.uid()
       and role in ('admin', 'manager', 'staff')
       and active = true
+      and account_status = 'active'
   );
 $$;
 

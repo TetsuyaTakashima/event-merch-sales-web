@@ -21,6 +21,12 @@ const roles = {
   viewer: "閲覧者",
 };
 
+const userStatuses = {
+  pending: "承認待ち",
+  active: "有効",
+  suspended: "停止",
+};
+
 const permissions = {
   admin: {
     sell: true,
@@ -226,11 +232,11 @@ function seedState() {
   ];
 
   const users = [
-    { id: "usr-admin", name: "佐藤 管理", role: "admin", active: true },
-    { id: "usr-manager", name: "田中 責任者", role: "manager", active: true },
-    { id: "usr-staff", name: "鈴木 スタッフ", role: "staff", active: true },
-    { id: "usr-tester", name: "テスト販売ユーザー", role: "tester", active: true },
-    { id: "usr-viewer", name: "閲覧ユーザー", role: "viewer", active: true },
+    { id: "usr-admin", name: "佐藤 管理", role: "admin", active: true, status: "active" },
+    { id: "usr-manager", name: "田中 責任者", role: "manager", active: true, status: "active" },
+    { id: "usr-staff", name: "鈴木 スタッフ", role: "staff", active: true, status: "active" },
+    { id: "usr-tester", name: "テスト販売ユーザー", role: "tester", active: true, status: "active" },
+    { id: "usr-viewer", name: "閲覧ユーザー", role: "viewer", active: true, status: "active" },
   ];
 
   const sales = [
@@ -370,15 +376,15 @@ function normalizeState(saved) {
     inventories: Array.isArray(saved?.inventories) ? saved.inventories : seed.inventories,
     sales: Array.isArray(saved?.sales) ? saved.sales : seed.sales,
     adjustments: Array.isArray(saved?.adjustments) ? saved.adjustments : [],
-    users: Array.isArray(saved?.users) ? saved.users : seed.users,
+    users: Array.isArray(saved?.users) ? saved.users.map(normalizeUser) : seed.users.map(normalizeUser),
   };
 
   if (!next.events.some((event) => event.id === next.selectedEventId)) {
     next.selectedEventId = next.events[0]?.id ?? seed.selectedEventId;
   }
 
-  if (!next.users.some((user) => user.id === next.currentUserId && user.active)) {
-    next.currentUserId = next.users.find((user) => user.active)?.id ?? seed.currentUserId;
+  if (!next.users.some((user) => user.id === next.currentUserId && isUserActive(user))) {
+    next.currentUserId = next.users.find(isUserActive)?.id ?? seed.currentUserId;
   }
 
   next.sales = next.sales.map((sale) => {
@@ -748,8 +754,8 @@ function render() {
     return;
   }
 
-  if (isSupabaseMode && authSession && authProfile && !authProfile.active) {
-    app.innerHTML = renderPendingApproval();
+  if (isSupabaseMode && authSession && authProfile && !isUserActive(authProfile)) {
+    app.innerHTML = renderInactiveAccount(authProfile);
     bindAppEvents(app);
     return;
   }
@@ -868,7 +874,14 @@ function renderAuth() {
   `;
 }
 
-function renderPendingApproval() {
+function renderInactiveAccount(profile = authProfile) {
+  const status = getUserStatus(profile);
+  const isSuspended = status === "suspended";
+  const label = userStatusLabel(status);
+  const message = isSuspended
+    ? "このアカウントは停止中です。利用再開が必要な場合は管理者に連絡してください。"
+    : "アカウント作成は完了しています。管理者がユーザー管理画面で有効化すると利用できます。";
+
   return `
     <main class="auth-page">
       <section class="auth-panel">
@@ -876,10 +889,10 @@ function renderPendingApproval() {
           <div class="brand-mark">売</div>
           <div class="brand-title">
             <strong>Merch Desk</strong>
-            <span>承認待ち</span>
+            <span>${label}</span>
           </div>
         </div>
-        <div class="notice">アカウント作成は完了しています。管理者がユーザー管理画面で有効化すると利用できます。</div>
+        <div class="notice">${message}</div>
         <button class="button secondary" data-action="sign-out" type="button">${icon("logout")}ログアウト</button>
       </section>
     </main>
@@ -907,7 +920,7 @@ function renderUserOptions() {
   }
 
   return state.users
-    .filter((user) => user.active)
+    .filter(isUserActive)
     .map((user) => `<option value="${user.id}" ${user.id === state.currentUserId ? "selected" : ""}>${escapeHtml(user.name)} / ${roles[user.role]}</option>`)
     .join("");
 }
@@ -2249,7 +2262,10 @@ function renderProductRow(row, canManage, eventId) {
 function renderUsers() {
   const canManage = can("manageUsers");
   const pendingUsers = pendingApprovalUsers();
-  const sortedUsers = [...state.users].sort((a, b) => Number(a.active) - Number(b.active) || a.name.localeCompare(b.name, "ja"));
+  const statusOrder = { pending: 0, active: 1, suspended: 2 };
+  const sortedUsers = [...state.users].sort(
+    (a, b) => (statusOrder[getUserStatus(a)] ?? 9) - (statusOrder[getUserStatus(b)] ?? 9) || a.name.localeCompare(b.name, "ja"),
+  );
   const addUserBody = isSupabaseMode
     ? `
         <form class="form-grid user-create-grid" data-action="add-user">
@@ -2272,10 +2288,11 @@ function renderUsers() {
             </select>
           </div>
           <div class="field">
-            <label for="user-active">状態</label>
-            <select id="user-active" class="select" name="active" ${!canManage ? "disabled" : ""}>
-              <option value="true" selected>有効</option>
-              <option value="false">無効</option>
+            <label for="user-status">状態</label>
+            <select id="user-status" class="select" name="status" ${!canManage ? "disabled" : ""}>
+              <option value="pending">承認待ち</option>
+              <option value="active" selected>有効</option>
+              <option value="suspended">停止</option>
             </select>
           </div>
           <button class="button" type="submit" ${!canManage ? "disabled" : ""}>${icon("plus")}追加</button>
@@ -2343,14 +2360,22 @@ function renderUsers() {
 function renderUserRow(user, canManage) {
   const deleteDisabled = !canManage || user.id === state.currentUserId || isLastActiveAdmin(user.id);
   const saveDisabled = !canManage;
-  const isPending = isSupabaseMode && !user.active;
+  const status = getUserStatus(user);
+  const isPending = isSupabaseMode && status === "pending";
+  const isSuspended = isSupabaseMode && status === "suspended";
+  const statusClass = userStatusClass(status);
+  const statusMessage = isPending
+    ? "承認待ちです。有効化すると利用できます。"
+    : isSuspended
+      ? "停止中です。このユーザーはログイン後も利用できません。"
+      : "";
 
   return `
-    <tr data-user-row="${user.id}" class="${isPending ? "is-pending-user" : ""}">
+    <tr data-user-row="${user.id}" class="${isPending || isSuspended ? "is-pending-user" : ""}">
       <td data-label="名前">
         <input class="input table-input" name="userName" value="${escapeAttribute(user.name)}" ${saveDisabled ? "disabled" : ""}>
         ${user.id === state.currentUserId ? `<div class="muted">現在の操作ユーザー</div>` : ""}
-        ${isPending ? `<div class="muted">承認待ちです。有効化すると利用できます。</div>` : ""}
+        ${statusMessage ? `<div class="muted">${statusMessage}</div>` : ""}
       </td>
       ${
         isSupabaseMode
@@ -2372,11 +2397,10 @@ function renderUserRow(user, canManage) {
         </select>
       </td>
       <td data-label="状態">
-        <select class="select table-input" name="userActive" ${saveDisabled ? "disabled" : ""}>
-          <option value="true" ${user.active ? "selected" : ""}>有効</option>
-          <option value="false" ${!user.active ? "selected" : ""}>${isSupabaseMode ? "承認待ち" : "無効"}</option>
+        <select class="select table-input" name="userStatus" ${saveDisabled ? "disabled" : ""}>
+          ${userStatusOptions(status)}
         </select>
-        <div><span class="status ${user.active ? "active" : isSupabaseMode ? "low" : "inactive"}">${user.active ? "有効" : isSupabaseMode ? "承認待ち" : "無効"}</span></div>
+        <div><span class="status ${statusClass}">${userStatusLabel(status)}</span></div>
       </td>
       <td data-label="操作">
         <div class="row-actions">
@@ -2842,10 +2866,11 @@ async function loadRemoteData() {
     email: authSession.user.email || "",
     role: "staff",
     active: false,
+    status: "pending",
   };
 
   authProfile = profile;
-  if (!profile.active) {
+  if (!isUserActive(profile)) {
     await unsubscribeRemoteStateChanges();
     remoteStateVersion = null;
     state = normalizeState({
@@ -2854,7 +2879,7 @@ async function loadRemoteData() {
       currentUserId: profile.id,
     });
     state.currentUserId = profile.id;
-    syncStatus = "承認待ち";
+    syncStatus = userStatusLabel(getUserStatus(profile));
     return;
   }
 
@@ -2902,15 +2927,23 @@ async function fetchRemoteStateRecord() {
 }
 
 async function fetchProfiles() {
-  const { data, error } = await supabase.from("profiles").select("id,email,name,role,active").order("created_at", { ascending: true });
+  let { data, error } = await supabase.from("profiles").select("id,email,name,role,active,account_status").order("created_at", { ascending: true });
+  if (error && String(error.message || "").includes("account_status")) {
+    const fallback = await supabase.from("profiles").select("id,email,name,role,active").order("created_at", { ascending: true });
+    data = fallback.data;
+    error = fallback.error;
+  }
   if (error) throw error;
-  return (data || []).map((profile) => ({
-    id: profile.id,
-    email: profile.email || "",
-    name: profile.name || profile.email || "未設定ユーザー",
-    role: profile.role || "staff",
-    active: profile.active !== false,
-  }));
+  return (data || []).map((profile) =>
+    normalizeUser({
+      id: profile.id,
+      email: profile.email || "",
+      name: profile.name || profile.email || "未設定ユーザー",
+      role: profile.role || "staff",
+      active: profile.active !== false,
+      status: profile.account_status,
+    }),
+  );
 }
 
 function addCart(variantId) {
@@ -3953,7 +3986,8 @@ async function addUser(form) {
     const email = String(data.get("email") || "").trim();
     const password = String(data.get("password") || "");
     const role = String(data.get("role") || "");
-    const active = String(data.get("active")) === "true";
+    const status = normalizeUserStatus(String(data.get("status") || "active"));
+    const active = status === "active";
 
     if (!name || !email || !password) {
       showToast("名前、ログインID、仮パスワードを入力してください");
@@ -3973,7 +4007,7 @@ async function addUser(form) {
     }
 
     try {
-      await createUserByAdmin({ name, email, password, role, active });
+      await createUserByAdmin({ name, email, password, role, status, active });
       await loadRemoteData();
       form.reset();
       showToast("ユーザーを追加しました");
@@ -3995,6 +4029,7 @@ async function addUser(form) {
     name,
     role: String(data.get("role")),
     active: true,
+    status: "active",
   });
   saveState();
   form.reset();
@@ -4031,7 +4066,8 @@ async function saveUser(userId, row) {
   const email = row.querySelector('[name="userEmail"]')?.value.trim() ?? user.email ?? "";
   const password = row.querySelector('[name="userPassword"]')?.value ?? "";
   const role = row.querySelector('[name="userRole"]')?.value ?? user.role;
-  const active = row.querySelector('[name="userActive"]')?.value === "true";
+  const status = normalizeUserStatus(row.querySelector('[name="userStatus"]')?.value ?? getUserStatus(user));
+  const active = status === "active";
 
   if (!name) {
     showToast("ユーザー名を入力してください");
@@ -4059,7 +4095,7 @@ async function saveUser(userId, row) {
   }
 
   if (user.id === state.currentUserId && !active) {
-    showToast("現在の操作ユーザーは無効化できません");
+    showToast("現在の操作ユーザーは承認待ち・停止にできません");
     return;
   }
 
@@ -4069,7 +4105,7 @@ async function saveUser(userId, row) {
   }
 
   if (isLastActiveAdmin(user.id) && (role !== "admin" || !active)) {
-    showToast("最後の有効な管理者は変更できません");
+    showToast("最後の有効な管理者は承認待ち・停止にできません");
     return;
   }
 
@@ -4077,10 +4113,11 @@ async function saveUser(userId, row) {
   user.email = email;
   user.role = role;
   user.active = active;
+  user.status = status;
 
   if (isSupabaseMode) {
     try {
-      await updateUserByAdmin({ userId: user.id, name, email, role, active, password });
+      await updateUserByAdmin({ userId: user.id, name, email, role, status, active, password });
     } catch (error) {
       console.error("Failed to update user.", error);
       showToast(authErrorMessage(error, "ユーザー更新に失敗しました"), 7000);
@@ -4135,9 +4172,11 @@ async function deleteUser(userId) {
 
   openConfirmModal({
     type: "delete-user",
-    title: "ユーザーを削除しますか？",
-    message: `${user.name} を削除します。販売履歴の担当者名は「不明」表示になります。`,
-    confirmLabel: isSupabaseMode ? "無効化する" : "削除する",
+    title: isSupabaseMode ? "ユーザーを停止しますか？" : "ユーザーを削除しますか？",
+    message: isSupabaseMode
+      ? `${user.name} を停止します。停止中のユーザーは利用できませんが、販売履歴の担当者情報は残ります。`
+      : `${user.name} を削除します。販売履歴の担当者名は「不明」表示になります。`,
+    confirmLabel: isSupabaseMode ? "停止する" : "削除する",
     tone: "danger",
     payload: { userId },
   });
@@ -4160,15 +4199,19 @@ async function performDeleteUser(userId) {
   }
 
   if (isSupabaseMode) {
-    const { error } = await supabase.from("profiles").update({ active: false }).eq("id", user.id);
+    let { error } = await supabase.from("profiles").update({ active: false, account_status: "suspended" }).eq("id", user.id);
+    if (error && String(error.message || "").includes("account_status")) {
+      const fallback = await supabase.from("profiles").update({ active: false }).eq("id", user.id);
+      error = fallback.error;
+    }
     if (error) {
-      console.error("Failed to deactivate profile.", error);
-      showToast("ユーザー削除に失敗しました");
+      console.error("Failed to suspend profile.", error);
+      showToast("ユーザー停止に失敗しました");
       return;
     }
     await loadRemoteData();
     saveState();
-    showToast("ユーザーを無効化しました");
+    showToast("ユーザーを停止しました");
     render();
     return;
   }
@@ -4462,7 +4505,7 @@ function eventNameById(eventId) {
 
 function canManageEventStatus() {
   const user = getCurrentUser();
-  return Boolean(user?.active && user.role === "admin");
+  return Boolean(isUserActive(user) && user.role === "admin");
 }
 
 function canSelectEvent(event) {
@@ -4546,23 +4589,65 @@ function salesCountForProductEvent(product, eventId) {
   return state.sales.filter((sale) => sale.eventId === eventId && sale.items.some((item) => variantIds.has(item.variantId))).length;
 }
 
+function normalizeUserStatus(status, activeFallback = true) {
+  const normalized = String(status || "").trim();
+  if (Object.prototype.hasOwnProperty.call(userStatuses, normalized)) return normalized;
+  return activeFallback === false ? "pending" : "active";
+}
+
+function normalizeUser(user = {}) {
+  const status = normalizeUserStatus(user.status || user.account_status, user.active);
+  return {
+    ...user,
+    role: roles[user.role] ? user.role : "staff",
+    active: status === "active",
+    status,
+  };
+}
+
+function getUserStatus(user) {
+  return normalizeUserStatus(user?.status || user?.account_status, user?.active);
+}
+
+function isUserActive(user) {
+  return getUserStatus(user) === "active";
+}
+
+function userStatusLabel(status) {
+  return userStatuses[normalizeUserStatus(status)] || userStatuses.pending;
+}
+
+function userStatusClass(status) {
+  const normalized = normalizeUserStatus(status);
+  if (normalized === "active") return "active";
+  if (normalized === "suspended") return "inactive";
+  return "low";
+}
+
+function userStatusOptions(currentStatus) {
+  const current = normalizeUserStatus(currentStatus);
+  return Object.entries(userStatuses)
+    .map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`)
+    .join("");
+}
+
 function activeAdminUsers() {
-  return state.users.filter((user) => user.active && user.role === "admin");
+  return state.users.filter((user) => isUserActive(user) && user.role === "admin");
 }
 
 function pendingApprovalUsers() {
   if (!isSupabaseMode) return [];
-  return state.users.filter((user) => !user.active);
+  return state.users.filter((user) => getUserStatus(user) === "pending");
 }
 
 function isLastActiveAdmin(userId) {
   const user = state.users.find((item) => item.id === userId);
-  return Boolean(user?.active && user.role === "admin" && activeAdminUsers().length <= 1);
+  return Boolean(isUserActive(user) && user.role === "admin" && activeAdminUsers().length <= 1);
 }
 
 function can(permission) {
   const user = getCurrentUser();
-  return Boolean(user?.active && permissions[user.role]?.[permission]);
+  return Boolean(isUserActive(user) && permissions[user.role]?.[permission]);
 }
 
 function canCancelSale(sale) {
@@ -4801,6 +4886,9 @@ function authErrorMessage(error, fallback) {
   }
   if (normalized.includes("profiles_role_check")) {
     return "Supabaseの権限制約にテスト販売ロールが未追加です。supabase/add-tester-role.sql をSQL Editorで実行してください。";
+  }
+  if (normalized.includes("account_status")) {
+    return "Supabaseのユーザー状態列が未追加です。supabase/add-account-status.sql をSQL Editorで実行してください。";
   }
 
   return message ? `${fallback}: ${message}` : fallback;

@@ -9,6 +9,7 @@ as $$
   from public.profiles
   where id = auth.uid()
     and active = true
+    and account_status = 'active'
   limit 1
 $$;
 

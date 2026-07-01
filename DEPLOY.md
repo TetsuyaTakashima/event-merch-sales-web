@@ -29,7 +29,7 @@
 8. デプロイ成功後、Supabase SQL Editorで `supabase/lock-down-app-state-writes.sql` を実行する。
 9. SupabaseのAuthentication > URL Configurationで、Vercelの公開URLをSite URLとRedirect URLsに追加する。
 
-既存のSupabase環境を更新する場合は、デプロイ前に `supabase/add-app-state-version.sql` と `supabase/add-app-state-rpc.sql` をSQL Editorで実行してください。`supabase/lock-down-app-state-writes.sql` はRPC対応版のデプロイ成功後に実行します。古いアプリコードのまま先に実行すると販売保存が失敗します。
+既存のSupabase環境を更新する場合は、デプロイ前に `supabase/add-account-status.sql`、`supabase/add-app-state-version.sql`、`supabase/add-app-state-rpc.sql` をSQL Editorで実行してください。`supabase/lock-down-app-state-writes.sql` はRPC対応版のデプロイ成功後に実行します。古いアプリコードのまま先に実行すると販売保存が失敗します。
 
 パスワード再設定メールを使う場合、Redirect URLsには以下のようなURLを入れます。
 
@@ -43,6 +43,8 @@ Supabase標準のメール送信は検証用です。送信先制限や低い送
 ユーザー管理画面でログインIDや仮パスワードを変更する場合は、Vercelに `SUPABASE_SERVICE_ROLE_KEY` を設定してください。このキーはサーバー関数だけで使うため、`VITE_` を付けず、ブラウザ側に公開しません。
 
 追加スタッフのアカウント作成もユーザー管理画面から行います。ログイン画面には公開アカウント作成ボタンを表示しません。
+
+ユーザー状態は「承認待ち / 有効 / 停止」の3種類です。「有効」以外のユーザーはアプリ利用と販売登録などのDB操作ができません。
 
 ユーザー更新時に `permission denied for table profiles` が出る場合は、Supabase SQL Editorで `supabase/grants.sql` を実行してください。
 

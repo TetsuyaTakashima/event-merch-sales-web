@@ -30,7 +30,7 @@ npm run dev
 - イベント、商品、ユーザーの簡易管理
 - イベントの追加、編集、削除
 - 商品名、商品コード、カテゴリ、バリエーション、SKU、価格、表示色の編集
-- ユーザーの追加、編集、削除
+- ユーザーの追加、編集、停止、状態管理（承認待ち / 有効 / 停止）
 - 画面上からのデータバックアップと復元
 
 ## データ保存
@@ -55,5 +55,6 @@ Supabaseモードでは更新番号による競合検知を行い、別端末の
 - `open-app.bat`: Windows向け起動ファイル
 - `vercel.json`: Vercel向け設定
 - `supabase/schema.sql`: Supabase用DB/RLS設定
+- `supabase/add-account-status.sql`: 既存Supabase環境にユーザー状態（承認待ち / 有効 / 停止）を追加
 - `supabase/add-app-state-rpc.sql`: 共有データ操作用RPCの追加
 - `supabase/lock-down-app-state-writes.sql`: RPC移行後に `app_state` の直接書込を閉じる追加設定

@@ -18,11 +18,11 @@ secret keyやservice role keyはブラウザアプリやVercelの公開環境変
 4. 続けて `supabase/add-app-state-rpc.sql` の全文を実行します。
 5. アプリをデプロイした後、`supabase/lock-down-app-state-writes.sql` を実行します。
 
-すでにこのアプリ用のテーブルを作成済みの場合は、まず `supabase/add-app-state-version.sql` を実行してください。次に `supabase/add-app-state-rpc.sql` を実行し、新しいアプリをデプロイした後で `supabase/lock-down-app-state-writes.sql` を実行してください。
+すでにこのアプリ用のテーブルを作成済みの場合は、まず `supabase/add-account-status.sql` と `supabase/add-app-state-version.sql` を実行してください。次に `supabase/add-app-state-rpc.sql` を実行し、新しいアプリをデプロイした後で `supabase/lock-down-app-state-writes.sql` を実行してください。
 
 `lock-down-app-state-writes.sql` は `app_state` への直接 `insert/update` を閉じます。古いアプリコードのまま先に実行すると販売保存が失敗するため、RPC対応版のデプロイ成功後に実行します。
 
-最初にアカウント作成したユーザーが管理者になります。2人目以降は販売スタッフとして作成されますが、管理者がユーザー管理画面で有効化するまで承認待ちになります。
+最初にアカウント作成したユーザーが管理者になります。2人目以降は販売スタッフとして作成されますが、管理者がユーザー管理画面で状態を「有効」にするまで承認待ちになります。「停止」にしたユーザーはログイン後も利用できず、販売登録などのDB操作もできません。
 
 ユーザー更新時に `permission denied for table profiles` が出る場合は、`supabase/grants.sql` の全文をSQL Editorで実行してください。新しいSupabaseプロジェクトでは、テーブルのData API権限を明示的に付与する必要がある場合があります。
 
@@ -93,7 +93,7 @@ Supabase標準のメール送信は検証用です。標準状態では送信先
 
 1. 公開URLを開きます。
 2. 管理者でログインします。
-3. ユーザー管理画面で追加スタッフの名前、ログインID、仮パスワード、権限、状態を入力して追加します。
+3. ユーザー管理画面で追加スタッフの名前、ログインID、仮パスワード、権限、状態（承認待ち / 有効 / 停止）を入力して追加します。
 4. 追加スタッフは公開URLからログインします。
 5. 管理者はユーザー管理画面でログインID、仮パスワード、権限、状態を変更できます。
 

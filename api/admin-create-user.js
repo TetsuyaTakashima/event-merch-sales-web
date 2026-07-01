@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 const roles = new Set(["admin", "manager", "staff", "tester", "viewer"]);
+const accountStatuses = new Set(["pending", "active", "suspended"]);
 
 export default {
   async fetch(request) {
@@ -47,7 +48,8 @@ export default {
       const email = String(payload.email || "").trim();
       const password = String(payload.password || "");
       const role = String(payload.role || "").trim();
-      const active = payload.active === true;
+      const status = normalizeAccountStatus(payload.status, payload.active);
+      const active = status === "active";
 
       if (!name || !email || !password || !role) {
         return json({ error: "名前、ログインID、仮パスワード、権限を入力してください" }, 400);
@@ -73,16 +75,30 @@ export default {
       const userId = created?.user?.id;
       if (!userId) return json({ error: "ユーザーを作成できませんでした" }, 500);
 
-      const { error: profileError } = await adminClient.from("profiles").upsert(
+      let { error: profileError } = await adminClient.from("profiles").upsert(
         {
           id: userId,
           email,
           name,
           role,
           active,
+          account_status: status,
         },
         { onConflict: "id" },
       );
+      if (profileError && String(profileError.message || "").includes("account_status")) {
+        const fallback = await adminClient.from("profiles").upsert(
+          {
+            id: userId,
+            email,
+            name,
+            role,
+            active,
+          },
+          { onConflict: "id" },
+        );
+        profileError = fallback.error;
+      }
 
       if (profileError) {
         await adminClient.auth.admin.deleteUser(userId).catch(() => {});
@@ -101,6 +117,12 @@ function bearerToken(request) {
   const header = request.headers.get("authorization") || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match?.[1] || "";
+}
+
+function normalizeAccountStatus(status, active) {
+  const normalized = String(status || "").trim();
+  if (accountStatuses.has(normalized)) return normalized;
+  return active === true ? "active" : "pending";
 }
 
 function json(payload, status = 200) {

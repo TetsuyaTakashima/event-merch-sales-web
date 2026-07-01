@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 
 const roles = new Set(["admin", "manager", "staff", "tester", "viewer"]);
+const accountStatuses = new Set(["pending", "active", "suspended"]);
 
 export default {
   async fetch(request) {
@@ -32,14 +33,23 @@ export default {
         auth: { autoRefreshToken: false, persistSession: false },
       });
       const adminUserId = sessionData.user.id;
-      const { data: adminProfile, error: adminProfileError } = await adminClient
+      let { data: adminProfile, error: adminProfileError } = await adminClient
         .from("profiles")
-        .select("id,role,active")
+        .select("id,role,active,account_status")
         .eq("id", adminUserId)
         .maybeSingle();
+      if (adminProfileError && String(adminProfileError.message || "").includes("account_status")) {
+        const fallback = await adminClient
+          .from("profiles")
+          .select("id,role,active")
+          .eq("id", adminUserId)
+          .maybeSingle();
+        adminProfile = fallback.data;
+        adminProfileError = fallback.error;
+      }
 
       if (adminProfileError) throw adminProfileError;
-      if (adminProfile?.role !== "admin" || adminProfile.active === false) {
+      if (adminProfile?.role !== "admin" || normalizeAccountStatus(adminProfile?.account_status, adminProfile?.active) !== "active") {
         return json({ error: "管理者のみユーザー情報を変更できます" }, 403);
       }
 
@@ -48,7 +58,8 @@ export default {
       const name = String(payload.name || "").trim();
       const email = String(payload.email || "").trim();
       const role = String(payload.role || "").trim();
-      const active = payload.active === true;
+      const status = normalizeAccountStatus(payload.status, payload.active);
+      const active = status === "active";
       const password = String(payload.password || "");
 
       if (!userId || !name || !email || !role) {
@@ -64,11 +75,20 @@ export default {
         return json({ error: "パスワードは6文字以上で入力してください" }, 400);
       }
 
-      const { data: targetProfile, error: targetProfileError } = await adminClient
+      let { data: targetProfile, error: targetProfileError } = await adminClient
         .from("profiles")
-        .select("id,email,role,active")
+        .select("id,email,role,active,account_status")
         .eq("id", userId)
         .maybeSingle();
+      if (targetProfileError && String(targetProfileError.message || "").includes("account_status")) {
+        const fallback = await adminClient
+          .from("profiles")
+          .select("id,email,role,active")
+          .eq("id", userId)
+          .maybeSingle();
+        targetProfile = fallback.data;
+        targetProfileError = fallback.error;
+      }
 
       if (targetProfileError) throw targetProfileError;
       if (!targetProfile) return json({ error: "対象ユーザーが見つかりません" }, 404);
@@ -80,14 +100,24 @@ export default {
         return json({ error: "自分自身の管理者権限は外せません" }, 400);
       }
 
-      const { count: activeAdminCount, error: countError } = await adminClient
+      let { count: activeAdminCount, error: countError } = await adminClient
         .from("profiles")
         .select("id", { count: "exact", head: true })
         .eq("role", "admin")
-        .eq("active", true);
+        .eq("account_status", "active");
+      if (countError && String(countError.message || "").includes("account_status")) {
+        const fallback = await adminClient
+          .from("profiles")
+          .select("id", { count: "exact", head: true })
+          .eq("role", "admin")
+          .eq("active", true);
+        activeAdminCount = fallback.count;
+        countError = fallback.error;
+      }
 
       if (countError) throw countError;
-      if (targetProfile.role === "admin" && targetProfile.active !== false && (role !== "admin" || !active) && activeAdminCount <= 1) {
+      const targetStatus = normalizeAccountStatus(targetProfile.account_status, targetProfile.active);
+      if (targetProfile.role === "admin" && targetStatus === "active" && (role !== "admin" || !active) && activeAdminCount <= 1) {
         return json({ error: "最後の有効な管理者は変更できません" }, 400);
       }
 
@@ -103,7 +133,11 @@ export default {
         if (authUpdateError) return json({ error: authUpdateError.message }, 400);
       }
 
-      const { error: profileUpdateError } = await adminClient.from("profiles").update({ email, name, role, active }).eq("id", userId);
+      let { error: profileUpdateError } = await adminClient.from("profiles").update({ email, name, role, active, account_status: status }).eq("id", userId);
+      if (profileUpdateError && String(profileUpdateError.message || "").includes("account_status")) {
+        const fallback = await adminClient.from("profiles").update({ email, name, role, active }).eq("id", userId);
+        profileUpdateError = fallback.error;
+      }
       if (profileUpdateError) throw profileUpdateError;
 
       return json({ ok: true });
@@ -118,6 +152,12 @@ function bearerToken(request) {
   const header = request.headers.get("authorization") || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match?.[1] || "";
+}
+
+function normalizeAccountStatus(status, active) {
+  const normalized = String(status || "").trim();
+  if (accountStatuses.has(normalized)) return normalized;
+  return active === true ? "active" : "pending";
 }
 
 function json(payload, status = 200) {
