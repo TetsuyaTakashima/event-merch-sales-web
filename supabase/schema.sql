@@ -92,6 +92,63 @@ as $$
   );
 $$;
 
+create or replace function public.app_state_current_role()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select role
+  from public.profiles
+  where id = auth.uid()
+    and active = true
+    and account_status = 'active'
+  limit 1
+$$;
+
+create or replace function public.app_state_current_id()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case
+    when public.app_state_current_role() = 'tester' then 'sandbox:' || auth.uid()::text
+    when public.app_state_current_role() in ('admin', 'manager', 'staff', 'viewer') then 'main'
+    else null
+  end
+$$;
+
+create or replace function public.can_read_app_state_id(p_state_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case
+    when public.app_state_current_role() = 'tester' then p_state_id = public.app_state_current_id()
+    when public.app_state_current_role() in ('admin', 'manager', 'staff', 'viewer') then p_state_id = 'main'
+    else false
+  end
+$$;
+
+create or replace function public.can_write_app_state_id(p_state_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case
+    when public.app_state_current_role() = 'tester' then p_state_id = public.app_state_current_id()
+    when public.app_state_current_role() in ('admin', 'manager') then p_state_id = 'main'
+    else false
+  end
+$$;
+
 create or replace function public.can_write_app_state()
 returns boolean
 language sql
@@ -99,14 +156,7 @@ stable
 security definer
 set search_path = public
 as $$
-  select exists (
-    select 1
-    from public.profiles
-    where id = auth.uid()
-      and role in ('admin', 'manager')
-      and active = true
-      and account_status = 'active'
-  );
+  select public.can_write_app_state_id(public.app_state_current_id())
 $$;
 
 create or replace function public.handle_new_user()
@@ -151,6 +201,10 @@ grant select on public.app_state to authenticated;
 grant all privileges on public.app_state to service_role;
 grant execute on function public.is_active_user() to authenticated, service_role;
 grant execute on function public.is_admin_user() to authenticated, service_role;
+grant execute on function public.app_state_current_role() to authenticated, service_role;
+grant execute on function public.app_state_current_id() to authenticated, service_role;
+grant execute on function public.can_read_app_state_id(text) to authenticated, service_role;
+grant execute on function public.can_write_app_state_id(text) to authenticated, service_role;
 grant execute on function public.can_write_app_state() to authenticated, service_role;
 grant execute on function public.handle_new_user() to service_role;
 grant execute on function public.touch_updated_at() to service_role;
@@ -159,7 +213,11 @@ drop policy if exists "profiles_select_authenticated" on public.profiles;
 create policy "profiles_select_authenticated"
 on public.profiles for select
 to authenticated
-using (public.is_active_user() or id = auth.uid());
+using (
+  id = auth.uid()
+  or public.is_admin_user()
+  or public.app_state_current_role() in ('manager', 'staff', 'viewer')
+);
 
 drop policy if exists "profiles_update_admin" on public.profiles;
 create policy "profiles_update_admin"
@@ -172,13 +230,13 @@ drop policy if exists "app_state_select_active" on public.app_state;
 create policy "app_state_select_active"
 on public.app_state for select
 to authenticated
-using (public.is_active_user());
+using (public.can_read_app_state_id(id));
 
 drop policy if exists "app_state_insert_active" on public.app_state;
 create policy "app_state_insert_active"
 on public.app_state for insert
 to authenticated
-with check (public.can_write_app_state());
+with check (public.can_write_app_state_id(id));
 
 -- RPC関数とapp_state直書き制限は supabase/add-app-state-rpc.sql で追加します。
 -- 新規セットアップ時も schema.sql の後に add-app-state-rpc.sql を実行してください。
@@ -187,5 +245,5 @@ drop policy if exists "app_state_update_active" on public.app_state;
 create policy "app_state_update_active"
 on public.app_state for update
 to authenticated
-using (public.can_write_app_state())
-with check (public.can_write_app_state());
+using (public.can_write_app_state_id(id))
+with check (public.can_write_app_state_id(id));

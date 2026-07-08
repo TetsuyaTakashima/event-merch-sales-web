@@ -34,12 +34,12 @@ export default {
       });
       const { data: adminProfile, error: adminProfileError } = await adminClient
         .from("profiles")
-        .select("id,role,active")
+        .select("id,role,active,account_status")
         .eq("id", sessionData.user.id)
         .maybeSingle();
 
       if (adminProfileError) throw adminProfileError;
-      if (adminProfile?.role !== "admin" || adminProfile.active === false) {
+      if (adminProfile?.role !== "admin" || normalizeAccountStatus(adminProfile?.account_status, adminProfile?.active) !== "active") {
         return json({ error: "管理者のみユーザーを追加できます" }, 403);
       }
 

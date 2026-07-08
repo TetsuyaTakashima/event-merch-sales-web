@@ -825,6 +825,11 @@ button:disabled {
   background: var(--warning-soft);
 }
 
+.sync-status-card.is-test {
+  border-left-color: var(--magenta);
+  background: var(--magenta-soft);
+}
+
 .recent-sale {
   border: 1px solid var(--accent);
   border-radius: var(--radius);
@@ -1044,6 +1049,11 @@ th.numeric {
 .status.info {
   background: var(--blue-soft);
   color: var(--blue);
+}
+
+.status.test {
+  background: var(--magenta-soft);
+  color: var(--magenta);
 }
 
 .list {

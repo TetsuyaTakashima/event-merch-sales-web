@@ -18,11 +18,13 @@ secret keyやservice role keyはブラウザアプリやVercelの公開環境変
 4. 続けて `supabase/add-app-state-rpc.sql` の全文を実行します。
 5. アプリをデプロイした後、`supabase/lock-down-app-state-writes.sql` を実行します。
 
-すでにこのアプリ用のテーブルを作成済みの場合は、まず `supabase/add-account-status.sql` と `supabase/add-app-state-version.sql` を実行してください。次に `supabase/add-app-state-rpc.sql` を実行し、新しいアプリをデプロイした後で `supabase/lock-down-app-state-writes.sql` を実行してください。
+すでにこのアプリ用のテーブルを作成済みの場合は、まず `supabase/add-account-status.sql` と `supabase/add-tester-role.sql` を実行してください。次に `supabase/add-app-state-version.sql` と `supabase/add-app-state-rpc.sql` を実行し、新しいアプリをデプロイした後で `supabase/lock-down-app-state-writes.sql` を実行してください。
 
 `lock-down-app-state-writes.sql` は `app_state` への直接 `insert/update` を閉じます。古いアプリコードのまま先に実行すると販売保存が失敗するため、RPC対応版のデプロイ成功後に実行します。
 
 最初にアカウント作成したユーザーが管理者になります。2人目以降は販売スタッフとして作成されますが、管理者がユーザー管理画面で状態を「有効」にするまで承認待ちになります。「停止」にしたユーザーはログイン後も利用できず、販売登録などのDB操作もできません。
+
+確認用アカウントを作る場合は、ユーザー管理画面で権限を「テスト販売」、状態を「有効」にします。テスト販売ユーザーは本番の `main` データを読まず、Supabase上の `sandbox:<ユーザーID>` に分離された確認用データだけを読み書きします。テスト環境内ではイベント、商品、在庫、販売、集計を確認できますが、本番売上には反映されません。
 
 ユーザー更新時に `permission denied for table profiles` が出る場合は、`supabase/grants.sql` の全文をSQL Editorで実行してください。新しいSupabaseプロジェクトでは、テーブルのData API権限を明示的に付与する必要がある場合があります。
 
@@ -101,4 +103,4 @@ Supabase標準のメール送信は検証用です。標準状態では送信先
 
 現在の実装では、既存UIをなるべく残すため、イベント・商品・販売・在庫の本体データをSupabaseの共有JSONとして保存しています。更新番号によって複数端末の同時更新を検知し、古いデータによる上書きを防止します。販売登録、販売取消、取消済み販売の削除、在庫調整、実在庫保存はSupabase RPCで実行し、DB側でも権限と在庫を確認します。
 
-DBポリシーでは閲覧者とテスト販売ユーザーによる共有JSONへの書込みを禁止しています。ただし共有JSON内の項目単位まではDB側で権限分離できません。監査要件がある運用や販売が非常に集中する規模では、売上・在庫などを個別テーブル化し、販売登録と在庫減算を専用DB関数化してください。
+DBポリシーでは、本番ユーザーは `app_state.id = 'main'`、テスト販売ユーザーは `app_state.id = 'sandbox:<ユーザーID>'` のみ参照できます。テスト販売ユーザーは本番売上を確認できず、自分の確認用データだけを更新します。監査要件がある運用や販売が非常に集中する規模では、売上・在庫などを個別テーブル化し、販売登録と在庫減算を専用DB関数化してください。

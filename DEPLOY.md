@@ -29,7 +29,7 @@
 8. デプロイ成功後、Supabase SQL Editorで `supabase/lock-down-app-state-writes.sql` を実行する。
 9. SupabaseのAuthentication > URL Configurationで、Vercelの公開URLをSite URLとRedirect URLsに追加する。
 
-既存のSupabase環境を更新する場合は、デプロイ前に `supabase/add-account-status.sql`、`supabase/add-app-state-version.sql`、`supabase/add-app-state-rpc.sql` をSQL Editorで実行してください。`supabase/lock-down-app-state-writes.sql` はRPC対応版のデプロイ成功後に実行します。古いアプリコードのまま先に実行すると販売保存が失敗します。
+既存のSupabase環境を更新する場合は、デプロイ前に `supabase/add-account-status.sql`、`supabase/add-tester-role.sql`、`supabase/add-app-state-version.sql`、`supabase/add-app-state-rpc.sql` をSQL Editorで実行してください。`supabase/lock-down-app-state-writes.sql` はRPC対応版のデプロイ成功後に実行します。古いアプリコードのまま先に実行すると販売保存が失敗します。
 
 パスワード再設定メールを使う場合、Redirect URLsには以下のようなURLを入れます。
 
@@ -45,6 +45,8 @@ Supabase標準のメール送信は検証用です。送信先制限や低い送
 追加スタッフのアカウント作成もユーザー管理画面から行います。ログイン画面には公開アカウント作成ボタンを表示しません。
 
 ユーザー状態は「承認待ち / 有効 / 停止」の3種類です。「有効」以外のユーザーはアプリ利用と販売登録などのDB操作ができません。
+
+確認用アカウントを作る場合は、権限を「テスト販売」にします。このアカウントは本番の売上データを読まず、`sandbox:<ユーザーID>` のテスト環境だけでイベント作成、商品登録、販売登録、集計確認を行います。
 
 ユーザー更新時に `permission denied for table profiles` が出る場合は、Supabase SQL Editorで `supabase/grants.sql` を実行してください。
 

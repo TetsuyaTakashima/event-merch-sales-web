@@ -13,6 +13,48 @@ as $$
   limit 1
 $$;
 
+create or replace function public.app_state_current_id()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case
+    when public.app_state_current_role() = 'tester' then 'sandbox:' || auth.uid()::text
+    when public.app_state_current_role() in ('admin', 'manager', 'staff', 'viewer') then 'main'
+    else null
+  end
+$$;
+
+create or replace function public.can_read_app_state_id(p_state_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case
+    when public.app_state_current_role() = 'tester' then p_state_id = public.app_state_current_id()
+    when public.app_state_current_role() in ('admin', 'manager', 'staff', 'viewer') then p_state_id = 'main'
+    else false
+  end
+$$;
+
+create or replace function public.can_write_app_state_id(p_state_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case
+    when public.app_state_current_role() = 'tester' then p_state_id = public.app_state_current_id()
+    when public.app_state_current_role() in ('admin', 'manager') then p_state_id = 'main'
+    else false
+  end
+$$;
+
 create or replace function public.can_manage_app_state()
 returns boolean
 language sql
@@ -20,7 +62,7 @@ stable
 security definer
 set search_path = public
 as $$
-  select public.app_state_current_role() in ('admin', 'manager')
+  select public.app_state_current_role() in ('admin', 'manager', 'tester')
 $$;
 
 create or replace function public.require_app_state_role(allowed_roles text[], action_label text)
@@ -57,8 +99,14 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  state_id text := public.app_state_current_id();
 begin
-  perform public.require_app_state_role(array['admin', 'manager'], '共有データ初期化');
+  perform public.require_app_state_role(array['admin', 'manager', 'tester'], '共有データ初期化');
+  if state_id is null then
+    raise exception '共有データを利用できません'
+      using errcode = '42501';
+  end if;
 
   if p_data is null or jsonb_typeof(p_data) <> 'object' then
     raise exception '共有データの形式が正しくありません'
@@ -66,7 +114,7 @@ begin
   end if;
 
   insert into public.app_state (id, data, version, updated_at)
-  values ('main', p_data - 'users' - 'currentUserId' - 'selectedEventId', 0, now())
+  values (state_id, p_data - 'users' - 'currentUserId' - 'selectedEventId', 0, now())
   on conflict (id) do nothing
   returning app_state.data, app_state.updated_at, app_state.version
   into data, updated_at, version;
@@ -75,7 +123,7 @@ begin
     select app_state.data, app_state.updated_at, app_state.version
     into data, updated_at, version
     from public.app_state
-    where id = 'main';
+    where id = state_id;
   end if;
 
   return next;
@@ -89,10 +137,15 @@ security definer
 set search_path = public
 as $$
 declare
+  state_id text := public.app_state_current_id();
   current_data jsonb;
   current_version bigint;
 begin
-  perform public.require_app_state_role(array['admin', 'manager'], '共有データ保存');
+  perform public.require_app_state_role(array['admin', 'manager', 'tester'], '共有データ保存');
+  if state_id is null then
+    raise exception '共有データを利用できません'
+      using errcode = '42501';
+  end if;
 
   if p_data is null or jsonb_typeof(p_data) <> 'object' then
     raise exception '共有データの形式が正しくありません'
@@ -102,12 +155,12 @@ begin
   select app_state.data, app_state.version
   into current_data, current_version
   from public.app_state
-  where id = 'main'
+  where id = state_id
   for update;
 
   if current_data is null then
     insert into public.app_state (id, data, version, updated_at)
-    values ('main', p_data - 'users' - 'currentUserId' - 'selectedEventId', 0, now())
+    values (state_id, p_data - 'users' - 'currentUserId' - 'selectedEventId', 0, now())
     returning app_state.data, app_state.updated_at, app_state.version
     into data, updated_at, version;
     return next;
@@ -123,7 +176,7 @@ begin
     data = p_data - 'users' - 'currentUserId' - 'selectedEventId',
     version = current_version + 1,
     updated_at = now()
-  where id = 'main'
+  where id = state_id
   returning app_state.data, app_state.updated_at, app_state.version
   into data, updated_at, version;
 
@@ -140,6 +193,7 @@ as $$
 declare
   actor_role text;
   actor_id text := auth.uid()::text;
+  state_id text := public.app_state_current_id();
   current_data jsonb;
   current_version bigint;
   sale_id text := nullif(p_sale->>'id', '');
@@ -162,7 +216,11 @@ declare
   change_due numeric;
   sale_record jsonb;
 begin
-  actor_role := public.require_app_state_role(array['admin', 'manager', 'staff'], '販売登録');
+  actor_role := public.require_app_state_role(array['admin', 'manager', 'staff', 'tester'], '販売登録');
+  if state_id is null then
+    raise exception '共有データを利用できません'
+      using errcode = '42501';
+  end if;
 
   if p_sale is null or jsonb_typeof(p_sale) <> 'object' then
     raise exception '販売データの形式が正しくありません'
@@ -180,7 +238,7 @@ begin
   select app_state.data, app_state.version
   into current_data, current_version
   from public.app_state
-  where id = 'main'
+  where id = state_id
   for update;
 
   if current_data is null then
@@ -196,7 +254,7 @@ begin
 
   if sale_record is not null then
     data := current_data;
-    updated_at := (select app_state.updated_at from public.app_state where id = 'main');
+    updated_at := (select app_state.updated_at from public.app_state where id = state_id);
     version := current_version;
     return next;
   end if;
@@ -328,7 +386,7 @@ begin
   set data = current_data,
       version = current_version + 1,
       updated_at = now()
-  where id = 'main'
+  where id = state_id
   returning app_state.data, app_state.updated_at, app_state.version
   into data, updated_at, version;
 
@@ -345,6 +403,7 @@ as $$
 declare
   actor_role text;
   actor_id text := auth.uid()::text;
+  state_id text := public.app_state_current_id();
   current_data jsonb;
   current_version bigint;
   sale_record jsonb;
@@ -356,12 +415,16 @@ declare
   current_stock integer;
   quantity integer;
 begin
-  actor_role := public.require_app_state_role(array['admin', 'manager', 'staff'], '販売取消');
+  actor_role := public.require_app_state_role(array['admin', 'manager', 'staff', 'tester'], '販売取消');
+  if state_id is null then
+    raise exception '共有データを利用できません'
+      using errcode = '42501';
+  end if;
 
   select app_state.data, app_state.version
   into current_data, current_version
   from public.app_state
-  where id = 'main'
+  where id = state_id
   for update;
 
   select (ordinality - 1)::integer, value
@@ -426,7 +489,7 @@ begin
   set data = current_data,
       version = current_version + 1,
       updated_at = now()
-  where id = 'main'
+  where id = state_id
   returning app_state.data, app_state.updated_at, app_state.version
   into data, updated_at, version;
 
@@ -441,16 +504,21 @@ security definer
 set search_path = public
 as $$
 declare
+  state_id text := public.app_state_current_id();
   current_data jsonb;
   current_version bigint;
   sale_record jsonb;
 begin
-  perform public.require_app_state_role(array['admin', 'manager'], '取消済み販売削除');
+  perform public.require_app_state_role(array['admin', 'manager', 'tester'], '取消済み販売削除');
+  if state_id is null then
+    raise exception '共有データを利用できません'
+      using errcode = '42501';
+  end if;
 
   select app_state.data, app_state.version
   into current_data, current_version
   from public.app_state
-  where id = 'main'
+  where id = state_id
   for update;
 
   select value
@@ -479,7 +547,7 @@ begin
   set data = current_data,
       version = current_version + 1,
       updated_at = now()
-  where id = 'main'
+  where id = state_id
   returning app_state.data, app_state.updated_at, app_state.version
   into data, updated_at, version;
 
@@ -495,6 +563,7 @@ set search_path = public
 as $$
 declare
   actor_id text := auth.uid()::text;
+  state_id text := public.app_state_current_id();
   current_data jsonb;
   current_version bigint;
   inventory_record jsonb;
@@ -502,7 +571,11 @@ declare
   current_stock integer;
   adjustment_record jsonb;
 begin
-  perform public.require_app_state_role(array['admin', 'manager'], '在庫調整');
+  perform public.require_app_state_role(array['admin', 'manager', 'tester'], '在庫調整');
+  if state_id is null then
+    raise exception '共有データを利用できません'
+      using errcode = '42501';
+  end if;
 
   if p_amount is null or p_amount = 0 then
     raise exception '調整数を入力してください'
@@ -512,7 +585,7 @@ begin
   select app_state.data, app_state.version
   into current_data, current_version
   from public.app_state
-  where id = 'main'
+  where id = state_id
   for update;
 
   select (ordinality - 1)::integer, value
@@ -560,7 +633,7 @@ begin
   set data = current_data,
       version = current_version + 1,
       updated_at = now()
-  where id = 'main'
+  where id = state_id
   returning app_state.data, app_state.updated_at, app_state.version
   into data, updated_at, version;
 
@@ -575,17 +648,22 @@ security definer
 set search_path = public
 as $$
 declare
+  state_id text := public.app_state_current_id();
   current_data jsonb;
   current_version bigint;
   inventory_record jsonb;
   inventory_index integer;
 begin
-  perform public.require_app_state_role(array['admin', 'manager'], '実在庫保存');
+  perform public.require_app_state_role(array['admin', 'manager', 'tester'], '実在庫保存');
+  if state_id is null then
+    raise exception '共有データを利用できません'
+      using errcode = '42501';
+  end if;
 
   select app_state.data, app_state.version
   into current_data, current_version
   from public.app_state
-  where id = 'main'
+  where id = state_id
   for update;
 
   select (ordinality - 1)::integer, value
@@ -611,7 +689,7 @@ begin
   set data = current_data,
       version = current_version + 1,
       updated_at = now()
-  where id = 'main'
+  where id = state_id
   returning app_state.data, app_state.updated_at, app_state.version
   into data, updated_at, version;
 
@@ -620,6 +698,9 @@ end;
 $$;
 
 grant execute on function public.app_state_current_role() to authenticated, service_role;
+grant execute on function public.app_state_current_id() to authenticated, service_role;
+grant execute on function public.can_read_app_state_id(text) to authenticated, service_role;
+grant execute on function public.can_write_app_state_id(text) to authenticated, service_role;
 grant execute on function public.can_manage_app_state() to authenticated, service_role;
 grant execute on function public.require_app_state_role(text[], text) to authenticated, service_role;
 grant execute on function public.app_state_now_iso() to authenticated, service_role;

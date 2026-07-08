@@ -8,7 +8,7 @@ const supabase = isSupabaseMode ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
 
 const STORAGE_KEY = "event-merch-sales-web.v1";
 const UI_STATE_KEY = "event-merch-sales-web.ui.v1";
-const REMOTE_STATE_ID = "main";
+const MAIN_REMOTE_STATE_ID = "main";
 
 const CASH_METHOD = "現金";
 const paymentMethods = ["現金", "クレジットカード", "QR決済", "電子マネー"];
@@ -70,17 +70,17 @@ const permissions = {
   },
   tester: {
     sell: true,
-    cancelAny: false,
-    adjustInventory: false,
-    closeEvent: false,
-    manageProducts: false,
-    manageEvents: false,
+    cancelAny: true,
+    adjustInventory: true,
+    closeEvent: true,
+    manageProducts: true,
+    manageEvents: true,
     manageUsers: false,
     manageData: false,
-    deleteCancelledSales: false,
-    dryRunSales: true,
+    deleteCancelledSales: true,
+    dryRunSales: false,
     exportCsv: false,
-    viewReports: false,
+    viewReports: true,
   },
   viewer: {
     sell: false,
@@ -130,6 +130,7 @@ let syncStatus = isSupabaseMode ? "未接続" : "ローカル保存";
 let saveQueue = Promise.resolve();
 let remoteStateVersion = null;
 let remoteStateEpoch = 0;
+let remoteStateId = MAIN_REMOTE_STATE_ID;
 let remoteStateChannel = null;
 let pendingRestoreSnapshot = null;
 
@@ -353,6 +354,52 @@ function seedState() {
   };
 }
 
+function createTesterSeedState(profile = authProfile) {
+  const user = normalizeUser({
+    id: profile?.id || "tester",
+    email: profile?.email || "",
+    name: profile?.name || profile?.email || "確認用ユーザー",
+    role: "tester",
+    active: true,
+    status: "active",
+  });
+  const event = {
+    id: "sandbox-test-event",
+    name: "テストイベント",
+    date: dateInputValue(),
+    venue: "テスト会場",
+    status: "open",
+    memo: "確認用アカウント専用のテスト環境です。本番の売上・在庫には反映されません。",
+  };
+
+  return {
+    selectedEventId: event.id,
+    currentUserId: user.id,
+    events: [event],
+    products: [],
+    inventories: [],
+    sales: [],
+    adjustments: [],
+    users: [user],
+  };
+}
+
+function isTesterUser(user) {
+  return user?.role === "tester";
+}
+
+function isTesterEnvironment() {
+  return isSupabaseMode && isTesterUser(authProfile || getCurrentUser());
+}
+
+function remoteStateIdForProfile(profile) {
+  return isTesterUser(profile) ? `sandbox:${profile.id}` : MAIN_REMOTE_STATE_ID;
+}
+
+function initialStateForProfile(profile) {
+  return isTesterUser(profile) ? createTesterSeedState(profile) : seedState();
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -504,15 +551,16 @@ async function runRemoteStateRpc(functionName, params) {
 function subscribeRemoteStateChanges() {
   if (!isSupabaseMode || !authSession || remoteStateChannel) return;
 
+  const channelName = `app-state-${remoteStateId.replace(/[^a-z0-9_-]/gi, "-")}`;
   remoteStateChannel = supabase
-    .channel("app-state-main")
+    .channel(channelName)
     .on(
       "postgres_changes",
       {
         event: "*",
         schema: "public",
         table: "app_state",
-        filter: `id=eq.${REMOTE_STATE_ID}`,
+        filter: `id=eq.${remoteStateId}`,
       },
       (payload) => {
         applyRemoteRealtimePayload(payload).catch((error) => {
@@ -941,6 +989,7 @@ function shell(content) {
   const currentUserOptions = renderUserOptions();
   const canManageData = can("manageData");
   const pendingUsers = pendingApprovalUsers();
+  const isTester = isTesterUser(currentUser);
   const labelWithBadge = (item) => (item.id === "users" && pendingUsers.length ? `${item.label}（承認待ち${pendingUsers.length}）` : item.label);
   const nav = navItems
     .map(
@@ -961,7 +1010,7 @@ function shell(content) {
           <div class="brand-mark">売</div>
           <div class="brand-title">
             <strong>Merch Desk</strong>
-            <span>イベント物販管理</span>
+            <span>${isTester ? "テスト環境" : "イベント物販管理"}</span>
           </div>
         </div>
         <select class="select mobile-nav" data-action="mobile-view" aria-label="画面選択">
@@ -970,6 +1019,7 @@ function shell(content) {
         <nav class="nav">${nav}</nav>
         <div class="sidebar-footer">
           <span class="role-badge">${roles[currentUser.role]}</span>
+          ${isTester ? `<span class="status test">テスト環境</span>` : ""}
           <span>${escapeHtml(currentUser.name)}として操作中</span>
         </div>
       </aside>
@@ -986,6 +1036,7 @@ function shell(content) {
             <select class="select" data-action="select-user" aria-label="操作ユーザー" ${isSupabaseMode ? "disabled" : ""}>
               ${currentUserOptions}
             </select>
+            ${isTester ? `<span class="status test">本番分離</span>` : ""}
             ${isSupabaseMode ? `<span class="status info">${escapeHtml(syncStatus)}</span><button class="button secondary" data-action="sign-out" type="button">${icon("logout")}ログアウト</button>` : ""}
             ${canManageData ? renderDataActions("topbar") : ""}
           </div>
@@ -1334,16 +1385,24 @@ function renderSyncStatusCard(compact = false) {
   const queuedCount = ui.retrySales.length;
   if (!isSupabaseMode && queuedCount === 0) return "";
 
+  const isTester = isTesterEnvironment();
   const isError = syncStatus.includes("失敗");
   const isSaving = syncStatus.includes("保存中");
-  const className = ["sync-status-card", compact ? "is-compact" : "", isError || queuedCount ? "is-warning" : isSaving ? "is-saving" : ""]
+  const className = [
+    "sync-status-card",
+    compact ? "is-compact" : "",
+    isTester ? "is-test" : "",
+    isError || queuedCount ? "is-warning" : isSaving ? "is-saving" : "",
+  ]
     .filter(Boolean)
     .join(" ");
-  const title = queuedCount ? `未送信の販売が${queuedCount}件あります` : isSupabaseMode ? syncStatus : "ローカル保存";
+  const title = queuedCount ? `未送信の販売が${queuedCount}件あります` : isTester ? `テスト環境 / ${syncStatus}` : isSupabaseMode ? syncStatus : "ローカル保存";
   const detail = queuedCount
     ? "通信が戻ったら、この画面から再送できます。"
     : isSaving
       ? "共有データへ保存しています。"
+      : isTester
+        ? "本番の売上・在庫とは分離された確認用データです。"
       : isSupabaseMode
         ? "複数端末で共有中です。"
         : "このブラウザに保存中です。";
@@ -1354,7 +1413,7 @@ function renderSyncStatusCard(compact = false) {
         <strong>${escapeHtml(title)}</strong>
         ${compact ? "" : `<span>${escapeHtml(detail)}</span>`}
       </div>
-      ${queuedCount ? `<span class="status low">未送信 ${queuedCount}</span>` : `<span class="status ${isError ? "inactive" : "active"}">${escapeHtml(syncStatus)}</span>`}
+      ${queuedCount ? `<span class="status low">未送信 ${queuedCount}</span>` : `<span class="status ${isError ? "inactive" : isTester ? "test" : "active"}">${escapeHtml(syncStatus)}</span>`}
     </div>
   `;
 }
@@ -2845,6 +2904,7 @@ async function signOut() {
   authSession = null;
   authProfile = null;
   remoteStateVersion = null;
+  remoteStateId = MAIN_REMOTE_STATE_ID;
   remoteStateEpoch += 1;
   state = seedState();
   appReady = true;
@@ -2859,7 +2919,7 @@ async function loadRemoteData() {
   if (!isSupabaseMode || !authSession) return;
 
   syncStatus = "読込中";
-  const profiles = await fetchProfiles();
+  let profiles = await fetchProfiles();
   const profile = profiles.find((item) => item.id === authSession.user.id) || {
     id: authSession.user.id,
     name: authSession.user.email || "ログインユーザー",
@@ -2868,8 +2928,12 @@ async function loadRemoteData() {
     active: false,
     status: "pending",
   };
+  if (isTesterUser(profile)) {
+    profiles = [profile];
+  }
 
   authProfile = profile;
+  remoteStateId = remoteStateIdForProfile(profile);
   if (!isUserActive(profile)) {
     await unsubscribeRemoteStateChanges();
     remoteStateVersion = null;
@@ -2883,7 +2947,7 @@ async function loadRemoteData() {
     return;
   }
 
-  const remoteRecord = await fetchRemoteState();
+  const remoteRecord = await fetchRemoteState(serializeStateForRemote(initialStateForProfile(profile)));
   remoteStateVersion = remoteRecord.version;
   state = normalizeRemoteState(remoteRecord.data, {
     users: profiles.length ? profiles : [profile],
@@ -2896,12 +2960,12 @@ async function loadRemoteData() {
   subscribeRemoteStateChanges();
 }
 
-async function fetchRemoteState() {
-  return fetchRemoteStateRecord();
+async function fetchRemoteState(initialState) {
+  return fetchRemoteStateRecord(initialState);
 }
 
-async function fetchRemoteStateRecord() {
-  const { data, error } = await supabase.from("app_state").select("data,updated_at,version").eq("id", REMOTE_STATE_ID).maybeSingle();
+async function fetchRemoteStateRecord(initialState = serializeStateForRemote(seedState())) {
+  const { data, error } = await supabase.from("app_state").select("data,updated_at,version").eq("id", remoteStateId).maybeSingle();
   if (error) throw error;
   if (data?.data) {
     return {
@@ -2911,11 +2975,10 @@ async function fetchRemoteStateRecord() {
     };
   }
 
-  const initialState = serializeStateForRemote(seedState());
   const { data: inserted, error: insertError } = await supabase.rpc("initialize_app_state", { p_data: initialState }).maybeSingle();
 
   if (insertError) {
-    if (insertError.code === "23505") return fetchRemoteStateRecord();
+    if (insertError.code === "23505") return fetchRemoteStateRecord(initialState);
     throw insertError;
   }
 
@@ -2934,7 +2997,7 @@ async function fetchProfiles() {
     error = fallback.error;
   }
   if (error) throw error;
-  return (data || []).map((profile) =>
+  const normalized = (data || []).map((profile) =>
     normalizeUser({
       id: profile.id,
       email: profile.email || "",
@@ -2944,6 +3007,9 @@ async function fetchProfiles() {
       status: profile.account_status,
     }),
   );
+  const currentProfile = normalized.find((profile) => profile.id === authSession?.user?.id);
+  if (isTesterUser(currentProfile)) return [currentProfile];
+  return normalized;
 }
 
 function addCart(variantId) {
@@ -2992,7 +3058,7 @@ function clearPendingSaleDraft() {
 }
 
 function performResetDemo() {
-  state = seedState();
+  state = isTesterEnvironment() ? createTesterSeedState(authProfile) : seedState();
   pendingRestoreSnapshot = null;
   ui = {
     ...ui,
@@ -3443,7 +3509,7 @@ function addEvent(form) {
     name,
     date,
     venue,
-    status: "draft",
+    status: isTesterUser(getCurrentUser()) ? "open" : "draft",
     memo: "",
   };
 
@@ -3470,7 +3536,7 @@ function duplicateEvent(eventId) {
     name: `${source.name} コピー`,
     date: source.date,
     venue: source.venue,
-    status: "draft",
+    status: isTesterUser(getCurrentUser()) ? "open" : "draft",
     memo: source.memo || "",
   };
 
@@ -4505,7 +4571,7 @@ function eventNameById(eventId) {
 
 function canManageEventStatus() {
   const user = getCurrentUser();
-  return Boolean(isUserActive(user) && user.role === "admin");
+  return Boolean(isUserActive(user) && (user.role === "admin" || user.role === "tester"));
 }
 
 function canSelectEvent(event) {
