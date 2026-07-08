@@ -9,6 +9,8 @@ const supabase = isSupabaseMode ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
 const STORAGE_KEY = "event-merch-sales-web.v1";
 const UI_STATE_KEY = "event-merch-sales-web.ui.v1";
 const MAIN_REMOTE_STATE_ID = "main";
+const TESTER_EVENT_RETENTION_DAYS = 3;
+const TESTER_EVENT_RETENTION_MS = TESTER_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 const CASH_METHOD = "現金";
 const paymentMethods = ["現金", "クレジットカード", "QR決済", "電子マネー"];
@@ -363,14 +365,7 @@ function createTesterSeedState(profile = authProfile) {
     active: true,
     status: "active",
   });
-  const event = {
-    id: "sandbox-test-event",
-    name: "テストイベント",
-    date: dateInputValue(),
-    venue: "テスト会場",
-    status: "open",
-    memo: "確認用アカウント専用のテスト環境です。本番の売上・在庫には反映されません。",
-  };
+  const event = createTesterSeedEvent();
 
   return {
     selectedEventId: event.id,
@@ -381,6 +376,18 @@ function createTesterSeedState(profile = authProfile) {
     sales: [],
     adjustments: [],
     users: [user],
+  };
+}
+
+function createTesterSeedEvent() {
+  return {
+    id: "sandbox-test-event",
+    name: "テストイベント",
+    date: dateInputValue(),
+    venue: "テスト会場",
+    status: "open",
+    memo: "確認用アカウント専用のテスト環境です。本番の売上・在庫には反映されません。",
+    createdAt: new Date().toISOString(),
   };
 }
 
@@ -398,6 +405,42 @@ function remoteStateIdForProfile(profile) {
 
 function initialStateForProfile(profile) {
   return isTesterUser(profile) ? createTesterSeedState(profile) : seedState();
+}
+
+function normalizeTimestamp(value, fallback = new Date().toISOString()) {
+  const time = Date.parse(value || "");
+  return Number.isFinite(time) ? new Date(time).toISOString() : fallback;
+}
+
+function normalizeEvent(event) {
+  return {
+    ...event,
+    createdAt: normalizeTimestamp(event?.createdAt),
+  };
+}
+
+function testerEventExpiresAt(event) {
+  const createdTime = Date.parse(event?.createdAt || "");
+  if (!Number.isFinite(createdTime)) return "";
+  return new Date(createdTime + TESTER_EVENT_RETENTION_MS).toISOString();
+}
+
+function isTesterEventExpired(event) {
+  const createdTime = Date.parse(event?.createdAt || "");
+  if (!Number.isFinite(createdTime)) return false;
+  return Date.now() - createdTime >= TESTER_EVENT_RETENTION_MS;
+}
+
+function nextTesterEventExpiry() {
+  const expiries = state.events.map(testerEventExpiresAt).filter(Boolean).sort();
+  return expiries[0] || "";
+}
+
+function testerEventRetentionDetail() {
+  const nextExpiry = nextTesterEventExpiry();
+  const base = `本番の売上・在庫とは分離された確認用データです。テストイベントは作成から${TESTER_EVENT_RETENTION_DAYS}日後にイベントごと自動削除されます。`;
+  if (!nextExpiry) return base;
+  return `${base} 次の削除予定: ${formatDateTime(nextExpiry)}ごろ。`;
 }
 
 function loadState() {
@@ -418,7 +461,7 @@ function normalizeState(saved) {
   const next = {
     ...seed,
     ...saved,
-    events: Array.isArray(saved?.events) ? saved.events : seed.events,
+    events: Array.isArray(saved?.events) ? saved.events.map(normalizeEvent) : seed.events.map(normalizeEvent),
     products: Array.isArray(saved?.products) ? saved.products : seed.products,
     inventories: Array.isArray(saved?.inventories) ? saved.inventories : seed.inventories,
     sales: Array.isArray(saved?.sales) ? saved.sales : seed.sales,
@@ -472,6 +515,48 @@ function normalizeState(saved) {
   }
 
   return next;
+}
+
+function removeEventDataFromState(targetState, eventId) {
+  targetState.products = targetState.products
+    .map((product) => ({
+      ...product,
+      eventIds: productEventIds(product, []).filter((id) => id !== eventId),
+      eventStatuses: Object.fromEntries(Object.entries(product.eventStatuses || {}).filter(([id]) => id !== eventId)),
+    }))
+    .filter((product) => product.eventIds.length > 0);
+  targetState.events = targetState.events.filter((event) => event.id !== eventId);
+  targetState.sales = targetState.sales.filter((sale) => sale.eventId !== eventId);
+  targetState.inventories = targetState.inventories.filter((inventory) => inventory.eventId !== eventId);
+  targetState.adjustments = targetState.adjustments.filter((adjustment) => adjustment.eventId !== eventId);
+}
+
+function ensureTesterHasEvent(targetState, profile = authProfile) {
+  if (targetState.events.length > 0) return false;
+  const event = createTesterSeedEvent();
+  targetState.events.push(event);
+  targetState.selectedEventId = event.id;
+  targetState.currentUserId = profile?.id || targetState.currentUserId;
+  return true;
+}
+
+function cleanupExpiredTesterEvents(targetState = state, profile = authProfile) {
+  if (!isTesterUser(profile || getCurrentUser())) return { changed: false, removedCount: 0 };
+
+  const expiredEvents = targetState.events.filter(isTesterEventExpired);
+  for (const event of expiredEvents) {
+    removeEventDataFromState(targetState, event.id);
+  }
+
+  const fallbackAdded = ensureTesterHasEvent(targetState, profile);
+  if (!targetState.events.some((event) => event.id === targetState.selectedEventId)) {
+    targetState.selectedEventId = targetState.events[0]?.id || "";
+  }
+
+  return {
+    changed: expiredEvents.length > 0 || fallbackAdded,
+    removedCount: expiredEvents.length,
+  };
 }
 
 function saveState() {
@@ -1399,10 +1484,10 @@ function renderSyncStatusCard(compact = false) {
   const title = queuedCount ? `未送信の販売が${queuedCount}件あります` : isTester ? `テスト環境 / ${syncStatus}` : isSupabaseMode ? syncStatus : "ローカル保存";
   const detail = queuedCount
     ? "通信が戻ったら、この画面から再送できます。"
-    : isSaving
-      ? "共有データへ保存しています。"
+      : isSaving
+        ? "共有データへ保存しています。"
       : isTester
-        ? "本番の売上・在庫とは分離された確認用データです。"
+        ? testerEventRetentionDetail()
       : isSupabaseMode
         ? "複数端末で共有中です。"
         : "このブラウザに保存中です。";
@@ -2107,6 +2192,7 @@ function renderEventRow(event, canManage) {
   const deleteDisabled = !canManage || state.events.length <= 1;
   const canSelect = canSelectEvent(event);
   const canChangeStatus = canManageEventStatus();
+  const testerExpiry = isTesterEnvironment() ? testerEventExpiresAt(event) : "";
 
   return `
     <tr data-event-row="${event.id}">
@@ -2114,6 +2200,7 @@ function renderEventRow(event, canManage) {
         <input class="input table-input event-name-input" name="eventName" value="${escapeAttribute(event.name)}" ${!canManage ? "disabled" : ""}>
         <textarea class="textarea table-textarea" name="eventMemo" placeholder="メモ" ${!canManage ? "disabled" : ""}>${escapeHtml(event.memo || "")}</textarea>
         ${event.id === state.selectedEventId ? `<div class="muted">現在の対象イベント</div>` : ""}
+        ${testerExpiry ? `<div class="muted">作成: ${formatDateTime(event.createdAt)} / 自動削除: ${formatDateTime(testerExpiry)}ごろ</div>` : ""}
       </td>
       <td data-label="開催日">
         <input class="input table-input" name="eventDate" type="date" value="${escapeAttribute(event.date)}" ${!canManage ? "disabled" : ""}>
@@ -2947,12 +3034,26 @@ async function loadRemoteData() {
     return;
   }
 
-  const remoteRecord = await fetchRemoteState(serializeStateForRemote(initialStateForProfile(profile)));
+  const initialState = initialStateForProfile(profile);
+  const remoteRecord = await fetchRemoteState(serializeStateForRemote(initialState));
   remoteStateVersion = remoteRecord.version;
+  const hadEventsWithoutCreatedAt =
+    isTesterUser(profile) && Array.isArray(remoteRecord.data?.events) && remoteRecord.data.events.some((event) => !event?.createdAt);
+
   state = normalizeRemoteState(remoteRecord.data, {
     users: profiles.length ? profiles : [profile],
     currentUserId: profile.id,
   });
+
+  if (isTesterUser(profile)) {
+    const cleanup = cleanupExpiredTesterEvents(state, profile);
+    if (cleanup.changed || hadEventsWithoutCreatedAt) {
+      await saveState();
+    }
+    if (cleanup.removedCount > 0) {
+      showToast(`作成から${TESTER_EVENT_RETENTION_DAYS}日経過したテストイベントを${cleanup.removedCount}件削除しました`, 7000);
+    }
+  }
   state.currentUserId = profile.id;
   restoreUiForCurrentState();
   ui.reportEventId = state.events.some((event) => event.id === ui.reportEventId) ? ui.reportEventId : state.selectedEventId;
@@ -3511,6 +3612,7 @@ function addEvent(form) {
     venue,
     status: isTesterUser(getCurrentUser()) ? "open" : "draft",
     memo: "",
+    createdAt: new Date().toISOString(),
   };
 
   state.events.push(event);
@@ -3538,6 +3640,7 @@ function duplicateEvent(eventId) {
     venue: source.venue,
     status: isTesterUser(getCurrentUser()) ? "open" : "draft",
     memo: source.memo || "",
+    createdAt: new Date().toISOString(),
   };
 
   state.events.push(event);
@@ -3785,17 +3888,7 @@ function performDeleteEvent(eventId) {
     return;
   }
 
-  state.products = state.products
-    .map((product) => ({
-      ...product,
-      eventIds: productEventIds(product).filter((id) => id !== event.id),
-      eventStatuses: Object.fromEntries(Object.entries(product.eventStatuses || {}).filter(([id]) => id !== event.id)),
-    }))
-    .filter((product) => product.eventIds.length > 0);
-  state.events = state.events.filter((item) => item.id !== event.id);
-  state.sales = state.sales.filter((sale) => sale.eventId !== event.id);
-  state.inventories = state.inventories.filter((inventory) => inventory.eventId !== event.id);
-  state.adjustments = state.adjustments.filter((adjustment) => adjustment.eventId !== event.id);
+  removeEventDataFromState(state, event.id);
 
   if (state.selectedEventId === event.id) {
     state.selectedEventId = state.events[0].id;

@@ -15,6 +15,7 @@ grant execute on function public.can_read_app_state_id(text) to authenticated, s
 grant execute on function public.can_write_app_state_id(text) to authenticated, service_role;
 grant execute on function public.can_manage_app_state() to authenticated, service_role;
 grant execute on function public.can_write_app_state() to authenticated, service_role;
+grant execute on function public.cleanup_expired_tester_events() to service_role;
 grant execute on function public.require_app_state_role(text[], text) to authenticated, service_role;
 grant execute on function public.app_state_now_iso() to authenticated, service_role;
 grant execute on function public.initialize_app_state(jsonb) to authenticated, service_role;

@@ -16,15 +16,16 @@ secret keyやservice role keyはブラウザアプリやVercelの公開環境変
 2. `supabase/schema.sql` の全文を貼り付けます。
 3. Runを押します。
 4. 続けて `supabase/add-app-state-rpc.sql` の全文を実行します。
-5. アプリをデプロイした後、`supabase/lock-down-app-state-writes.sql` を実行します。
+5. 確認用アカウントを使う場合は `supabase/add-tester-event-ttl.sql` を実行し、テストイベントの3日後自動削除を有効にします。
+6. アプリをデプロイした後、`supabase/lock-down-app-state-writes.sql` を実行します。
 
-すでにこのアプリ用のテーブルを作成済みの場合は、まず `supabase/add-account-status.sql` と `supabase/add-tester-role.sql` を実行してください。次に `supabase/add-app-state-version.sql` と `supabase/add-app-state-rpc.sql` を実行し、新しいアプリをデプロイした後で `supabase/lock-down-app-state-writes.sql` を実行してください。
+すでにこのアプリ用のテーブルを作成済みの場合は、まず `supabase/add-account-status.sql` と `supabase/add-tester-role.sql` を実行してください。次に `supabase/add-app-state-version.sql` と `supabase/add-app-state-rpc.sql`、`supabase/add-tester-event-ttl.sql` を実行し、新しいアプリをデプロイした後で `supabase/lock-down-app-state-writes.sql` を実行してください。
 
 `lock-down-app-state-writes.sql` は `app_state` への直接 `insert/update` を閉じます。古いアプリコードのまま先に実行すると販売保存が失敗するため、RPC対応版のデプロイ成功後に実行します。
 
 最初にアカウント作成したユーザーが管理者になります。2人目以降は販売スタッフとして作成されますが、管理者がユーザー管理画面で状態を「有効」にするまで承認待ちになります。「停止」にしたユーザーはログイン後も利用できず、販売登録などのDB操作もできません。
 
-確認用アカウントを作る場合は、ユーザー管理画面で権限を「テスト販売」、状態を「有効」にします。テスト販売ユーザーは本番の `main` データを読まず、Supabase上の `sandbox:<ユーザーID>` に分離された確認用データだけを読み書きします。テスト環境内ではイベント、商品、在庫、販売、集計を確認できますが、本番売上には反映されません。
+確認用アカウントを作る場合は、ユーザー管理画面で権限を「テスト販売」、状態を「有効」にします。テスト販売ユーザーは本番の `main` データを読まず、Supabase上の `sandbox:<ユーザーID>` に分離された確認用データだけを読み書きします。テスト環境内ではイベント、商品、在庫、販売、集計を確認できますが、本番売上には反映されません。テスト環境で作成したイベントは、イベント作成から3日後に自動削除されます。
 
 ユーザー更新時に `permission denied for table profiles` が出る場合は、`supabase/grants.sql` の全文をSQL Editorで実行してください。新しいSupabaseプロジェクトでは、テーブルのData API権限を明示的に付与する必要がある場合があります。
 
