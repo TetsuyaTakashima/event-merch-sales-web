@@ -112,6 +112,13 @@ const navItems = [
   { id: "menu", label: "メニュー", icon: "menu" },
 ];
 
+const primaryNavIds = ["dashboard", "pos", "history", "inventory", "reports", "menu"];
+const bottomNavIds = ["pos", "history", "inventory", "menu"];
+const managementNavIds = ["events", "products", "users"];
+const primaryNavItems = navItems.filter((item) => primaryNavIds.includes(item.id));
+const bottomNavItems = navItems.filter((item) => bottomNavIds.includes(item.id));
+const managementNavItems = navItems.filter((item) => managementNavIds.includes(item.id));
+
 const viewTitles = {
   dashboard: "ダッシュボード",
   pos: "販売登録",
@@ -906,6 +913,7 @@ function render() {
   }
 
   ensureSelectedEventIsSelectableForCurrentUser();
+  ensureCurrentViewIsAccessible();
 
   app.innerHTML = shell(renderView());
   bindAppEvents(app);
@@ -1068,25 +1076,88 @@ function renderDataActions(scope) {
   `;
 }
 
+function isManagementView(view = ui.view) {
+  return managementNavIds.includes(view);
+}
+
+function requiredPermissionForView(view) {
+  if (view === "events") return "manageEvents";
+  if (view === "products") return "manageProducts";
+  if (view === "users") return "manageUsers";
+  return "";
+}
+
+function canAccessView(view) {
+  const requiredPermission = requiredPermissionForView(view);
+  return requiredPermission ? can(requiredPermission) : true;
+}
+
+function fallbackViewForCurrentUser() {
+  if (can("sell")) return "pos";
+  if (can("viewReports")) return "dashboard";
+  return "menu";
+}
+
+function ensureCurrentViewIsAccessible() {
+  if (canAccessView(ui.view)) return;
+  ui.view = fallbackViewForCurrentUser();
+}
+
+function renderTesterEnvironmentBanner() {
+  if (!isTesterEnvironment()) return "";
+  return `
+    <div class="environment-banner">
+      <div>
+        <strong>テスト販売環境です</strong>
+        <span>本番の売上・在庫・イベントには影響しません。テストで作成したイベントは作成から${TESTER_EVENT_RETENTION_DAYS}日後に自動削除されます。</span>
+      </div>
+      <span class="status test">本番分離</span>
+    </div>
+  `;
+}
+
+function renderBottomNav(pendingUsers = []) {
+  return `
+    <nav class="mobile-bottom-nav" aria-label="主要画面">
+      ${bottomNavItems
+        .map((item) => {
+          const isActive = ui.view === item.id || (item.id === "menu" && isManagementView());
+          const label = item.id === "menu" && pendingUsers.length ? `メニュー` : item.label;
+          return `
+            <button class="mobile-bottom-nav-button ${isActive ? "is-active" : ""}" data-action="view" data-view="${item.id}" type="button">
+              ${icon(item.icon)}
+              <span>${label}</span>
+              ${item.id === "menu" && pendingUsers.length ? `<span class="nav-badge">${pendingUsers.length}</span>` : ""}
+            </button>
+          `;
+        })
+        .join("")}
+    </nav>
+  `;
+}
+
 function shell(content) {
   const activeEvent = getActiveEvent();
   const currentUser = getCurrentUser();
   const currentUserOptions = renderUserOptions();
-  const canManageData = can("manageData");
   const pendingUsers = pendingApprovalUsers();
   const isTester = isTesterUser(currentUser);
-  const labelWithBadge = (item) => (item.id === "users" && pendingUsers.length ? `${item.label}（承認待ち${pendingUsers.length}）` : item.label);
-  const nav = navItems
+  const labelWithBadge = (item) => {
+    if ((item.id === "users" || item.id === "menu") && pendingUsers.length) return `${item.label}（承認待ち${pendingUsers.length}）`;
+    return item.label;
+  };
+  const nav = primaryNavItems
     .map(
       (item) => `
-        <button class="nav-button ${ui.view === item.id ? "is-active" : ""}" data-action="view" data-view="${item.id}">
+        <button class="nav-button ${ui.view === item.id || (item.id === "menu" && isManagementView()) ? "is-active" : ""}" data-action="view" data-view="${item.id}">
           ${icon(item.icon)}
           <span>${item.label}</span>
-          ${item.id === "users" && pendingUsers.length ? `<span class="nav-badge">${pendingUsers.length}</span>` : ""}
+          ${item.id === "menu" && pendingUsers.length ? `<span class="nav-badge">${pendingUsers.length}</span>` : ""}
         </button>
       `,
     )
     .join("");
+  const navSelectItems = [...primaryNavItems, ...managementNavItems].filter((item) => canAccessView(item.id));
 
   return `
     <div class="app-shell">
@@ -1099,7 +1170,7 @@ function shell(content) {
           </div>
         </div>
         <select class="select mobile-nav" data-action="mobile-view" aria-label="画面選択">
-          ${navItems.map((item) => `<option value="${item.id}" ${ui.view === item.id ? "selected" : ""}>${labelWithBadge(item)}</option>`).join("")}
+          ${navSelectItems.map((item) => `<option value="${item.id}" ${ui.view === item.id ? "selected" : ""}>${labelWithBadge(item)}</option>`).join("")}
         </select>
         <nav class="nav">${nav}</nav>
         <div class="sidebar-footer">
@@ -1116,18 +1187,21 @@ function shell(content) {
           </div>
           <div class="topbar-actions">
             <select class="select" data-action="select-event" aria-label="対象イベント">
-              ${renderEventOptions(activeEvent.id)}
+            ${renderEventOptions(activeEvent.id)}
             </select>
             <select class="select" data-action="select-user" aria-label="操作ユーザー" ${isSupabaseMode ? "disabled" : ""}>
               ${currentUserOptions}
             </select>
             ${isTester ? `<span class="status test">本番分離</span>` : ""}
             ${isSupabaseMode ? `<span class="status info">${escapeHtml(syncStatus)}</span><button class="button secondary" data-action="sign-out" type="button">${icon("logout")}ログアウト</button>` : ""}
-            ${canManageData ? renderDataActions("topbar") : ""}
           </div>
         </header>
-        <section class="content">${content}</section>
+        <section class="content">
+          ${renderTesterEnvironmentBanner()}
+          ${content}
+        </section>
       </main>
+      ${renderBottomNav(pendingUsers)}
       ${ui.toast ? `<div class="toast">${escapeHtml(ui.toast)}</div>` : ""}
       ${ui.modal ? renderModal() : ""}
     </div>
@@ -1265,6 +1339,30 @@ function renderView() {
 function renderMenu() {
   const currentUser = getCurrentUser();
   const canManageData = can("manageData");
+  const pendingUsers = pendingApprovalUsers();
+  const managementCards = [
+    {
+      id: "events",
+      title: "イベント管理",
+      description: "イベントの作成、販売状態、導入前販売の入力",
+      enabled: can("manageEvents"),
+      badge: "",
+    },
+    {
+      id: "products",
+      title: "商品管理",
+      description: "商品・価格・表示色・販売状態を管理",
+      enabled: can("manageProducts"),
+      badge: "",
+    },
+    {
+      id: "users",
+      title: "ユーザー管理",
+      description: "権限、承認待ち、有効・停止を管理",
+      enabled: can("manageUsers"),
+      badge: pendingUsers.length ? `承認待ち ${pendingUsers.length}` : "",
+    },
+  ].filter((item) => item.enabled);
 
   return `
     <div class="menu-layout">
@@ -1296,6 +1394,35 @@ function renderMenu() {
             </div>
             ${isSupabaseMode ? `<button class="button secondary" data-action="sign-out" type="button">${icon("logout")}ログアウト</button>` : ""}
           </div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>管理メニュー</h2>
+            <p>日常の販売操作と分けて、設定・管理系の画面を開きます</p>
+          </div>
+        </div>
+        <div class="panel-body">
+          ${
+            managementCards.length
+              ? `<div class="management-grid">
+                  ${managementCards
+                    .map(
+                      (item) => `
+                        <button class="management-card" data-action="view" data-view="${item.id}" type="button">
+                          <span>
+                            <strong>${item.title}</strong>
+                            <small>${item.description}</small>
+                          </span>
+                          ${item.badge ? `<span class="status low">${item.badge}</span>` : `<span class="status info">開く</span>`}
+                        </button>
+                      `,
+                    )
+                    .join("")}
+                </div>`
+              : `<div class="notice">現在の権限では管理画面は利用できません。販売、履歴、在庫、集計のみ利用できます。</div>`
+          }
         </div>
       </section>
       <section class="panel">
@@ -1649,6 +1776,7 @@ function renderProductCard(row) {
       aria-pressed="${inCart ? "true" : "false"}"
       ${disabled ? "disabled" : ""}
     >
+      ${inCart ? `<span class="cart-quantity-badge">カート内 ${cartQuantity}点</span>` : ""}
       <span class="product-top">
         <span class="swatch" style="background:${escapeAttribute(row.variant.color)}"></span>
         <span class="product-heading">
@@ -1835,6 +1963,7 @@ function renderInventory() {
           <h2>在庫一覧</h2>
           <p>実在庫を入力すると理論在庫との差異を確認できます</p>
         </div>
+        ${can("manageProducts") ? `<button class="button secondary" data-action="view" data-view="products" type="button">${icon("tag")}商品管理へ</button>` : ""}
       </div>
       <div class="panel-body">
         <div class="table-wrap">
@@ -1858,7 +1987,6 @@ function renderInventory() {
         </div>
       </div>
     </section>
-    ${renderProducts()}
   `;
 }
 
@@ -1917,10 +2045,15 @@ function renderReports() {
         </div>
       </div>
       <div class="toolbar-right">
-        <button class="button secondary" data-action="export-csv" data-export="sales" type="button" ${!can("exportCsv") ? "disabled" : ""}>${icon("download")}売上明細CSV</button>
-        <button class="button secondary" data-action="export-csv" data-export="products" type="button" ${!can("exportCsv") ? "disabled" : ""}>${icon("download")}商品別CSV</button>
-        <button class="button secondary" data-action="export-csv" data-export="payments" type="button" ${!can("exportCsv") ? "disabled" : ""}>${icon("download")}決済別CSV</button>
-        <button class="button secondary" data-action="export-csv" data-export="inventory" type="button" ${!can("exportCsv") ? "disabled" : ""}>${icon("download")}在庫CSV</button>
+        <details class="export-menu">
+          <summary class="button secondary">${icon("download")}CSV出力</summary>
+          <div class="export-menu-body">
+            <button class="button secondary" data-action="export-csv" data-export="sales" type="button" ${!can("exportCsv") ? "disabled" : ""}>売上明細CSV</button>
+            <button class="button secondary" data-action="export-csv" data-export="products" type="button" ${!can("exportCsv") ? "disabled" : ""}>商品別CSV</button>
+            <button class="button secondary" data-action="export-csv" data-export="payments" type="button" ${!can("exportCsv") ? "disabled" : ""}>決済別CSV</button>
+            <button class="button secondary" data-action="export-csv" data-export="inventory" type="button" ${!can("exportCsv") ? "disabled" : ""}>在庫CSV</button>
+          </div>
+        </details>
       </div>
     </div>
     <div class="metric-grid">
@@ -2056,13 +2189,14 @@ function renderEvents() {
       </div>
     </section>
     ${renderPreSystemSalesImport(canManage)}
-    <section class="panel">
-      <div class="panel-header">
+    <details class="panel disclosure-panel" data-panel="event-add">
+      <summary class="disclosure-summary">
         <div>
           <h2>イベント追加</h2>
           <p>必要に応じて既存イベントの商品・初期在庫をコピーできます</p>
         </div>
-      </div>
+        <span class="status info">開く</span>
+      </summary>
       <div class="panel-body">
         <form class="form-grid" data-action="add-event">
           <div class="field">
@@ -2087,7 +2221,7 @@ function renderEvents() {
           <button class="button" type="submit" ${!canManage ? "disabled" : ""}>${icon("plus")}追加</button>
         </form>
       </div>
-    </section>
+    </details>
   `;
 }
 
@@ -2097,14 +2231,14 @@ function renderPreSystemSalesImport(canManage) {
   const defaultDate = event.date || dateInputValue();
 
   return `
-    <section class="panel">
-      <div class="panel-header">
+    <details class="panel disclosure-panel" data-panel="pre-system-sales">
+      <summary class="disclosure-summary">
         <div>
           <h2>導入前販売の一括入力</h2>
           <p>${escapeHtml(event.name)}で、システム利用前に売れていた数量をまとめて登録</p>
         </div>
         <span class="status info">販売履歴・集計に反映</span>
-      </div>
+      </summary>
       <div class="panel-body stack">
         <div class="notice">
           イベント開始時の初期在庫を入れている場合は「在庫も減らす」をONにしてください。すでに現在庫を減らして登録済みの場合はOFFにできます。
@@ -2166,7 +2300,7 @@ function renderPreSystemSalesImport(canManage) {
             : `<div class="empty">このイベントに商品がありません。先に商品を登録してください。</div>`
         }
       </div>
-    </section>
+    </details>
   `;
 }
 
@@ -2214,11 +2348,16 @@ function renderEventRow(event, canManage) {
         <div class="row-actions">
           <button class="button secondary" data-action="activate-event" data-event-id="${event.id}" type="button" ${!canSelect ? "disabled" : ""}>${icon("check")}選択</button>
           <button class="button secondary" data-action="save-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("save")}保存</button>
-          <button class="button secondary" data-action="duplicate-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("copy")}複製</button>
-          <button class="button secondary" data-action="set-event-status" data-event-id="${event.id}" data-status="open" type="button" ${!canChangeStatus ? "disabled" : ""}>${icon("play")}販売中</button>
-          <button class="button warning" data-action="set-event-status" data-event-id="${event.id}" data-status="closed" type="button" ${!canChangeStatus ? "disabled" : ""}>${icon("lock")}中止</button>
-          <button class="button danger" data-action="delete-event" data-event-id="${event.id}" type="button" ${deleteDisabled ? "disabled" : ""}>${icon("trash")}削除</button>
         </div>
+        <details class="row-more-actions">
+          <summary>その他の操作</summary>
+          <div class="row-actions">
+            <button class="button secondary" data-action="duplicate-event" data-event-id="${event.id}" type="button" ${!canManage ? "disabled" : ""}>${icon("copy")}複製</button>
+            <button class="button secondary" data-action="set-event-status" data-event-id="${event.id}" data-status="open" type="button" ${!canChangeStatus ? "disabled" : ""}>${icon("play")}販売中</button>
+            <button class="button warning" data-action="set-event-status" data-event-id="${event.id}" data-status="closed" type="button" ${!canChangeStatus ? "disabled" : ""}>${icon("lock")}中止</button>
+            <button class="button danger" data-action="delete-event" data-event-id="${event.id}" type="button" ${deleteDisabled ? "disabled" : ""}>${icon("trash")}削除</button>
+          </div>
+        </details>
         ${state.events.length <= 1 ? `<div class="muted">最後のイベントは削除できません</div>` : ""}
         ${!canSelect && !canManageEventStatus() ? `<div class="muted">販売中のイベントのみ選択できます</div>` : ""}
         ${!canChangeStatus ? `<div class="muted">販売状態の変更は管理者のみ可能です</div>` : ""}
@@ -2244,16 +2383,11 @@ function renderProducts() {
       </div>
       <div class="panel-body">
         <div class="table-wrap">
-          <table class="products-table">
+          <table class="mobile-card-table products-table">
             <thead>
               <tr>
                 <th>商品</th>
-                <th>カテゴリ</th>
-                <th>バリエーション</th>
-                <th>SKU</th>
-                <th class="numeric">価格</th>
-                <th>表示色</th>
-                <th class="numeric">現在庫</th>
+                <th>価格・在庫</th>
                 <th>状態</th>
                 <th>操作</th>
               </tr>
@@ -2262,20 +2396,21 @@ function renderProducts() {
               ${
                 rows.length
                   ? rows.map((row) => renderProductRow(row, canManage, event.id)).join("")
-                  : `<tr><td colspan="9"><div class="empty">このイベントの商品はまだありません</div></td></tr>`
+                  : `<tr><td colspan="4"><div class="empty">このイベントの商品はまだありません</div></td></tr>`
               }
             </tbody>
           </table>
         </div>
       </div>
     </section>
-    <section class="panel">
-      <div class="panel-header">
+    <details class="panel disclosure-panel" data-panel="link-product">
+      <summary class="disclosure-summary">
         <div>
           <h2>登録済み商品を追加</h2>
           <p>${escapeHtml(event.name)}に既存の商品を紐づけ</p>
         </div>
-      </div>
+        <span class="status info">開く</span>
+      </summary>
       <div class="panel-body">
         ${
           linkCandidates.length
@@ -2308,14 +2443,15 @@ function renderProducts() {
             : `<div class="empty">紐づけ可能な登録済み商品はありません</div>`
         }
       </div>
-    </section>
-    <section class="panel">
-      <div class="panel-header">
+    </details>
+    <details class="panel disclosure-panel" data-panel="add-product">
+      <summary class="disclosure-summary">
         <div>
           <h2>イベント商品追加</h2>
           <p>${escapeHtml(event.name)}専用の商品として追加</p>
         </div>
-      </div>
+        <span class="status info">開く</span>
+      </summary>
       <div class="panel-body">
         <form class="form-grid" data-action="add-product">
           <div class="field">
@@ -2354,7 +2490,7 @@ function renderProducts() {
           <button class="button" type="submit" ${!canManage ? "disabled" : ""}>${icon("plus")}追加</button>
         </form>
       </div>
-    </section>
+    </details>
   `;
 }
 
@@ -2365,29 +2501,54 @@ function renderProductRow(row, canManage, eventId) {
 
   return `
     <tr data-product-row="${row.product.id}:${row.variant.id}">
-      <td>
-        <input class="input table-input product-name-input" name="productName" value="${escapeAttribute(row.product.name)}" ${!canManage ? "disabled" : ""}>
-        <input class="input table-input product-code-input" name="productCode" value="${escapeAttribute(row.product.code)}" ${!canManage ? "disabled" : ""} aria-label="商品コード">
+      <td data-label="商品">
+        <div class="product-row-summary">
+          <span class="swatch is-small" style="background:${escapeAttribute(row.variant.color)}"></span>
+          <div>
+            <strong>${escapeHtml(row.product.name)} / ${escapeHtml(row.variant.name)}</strong>
+            <div class="muted">${escapeHtml(row.product.category)} / ${escapeHtml(row.product.code)} / ${escapeHtml(row.variant.sku)}</div>
+          </div>
+        </div>
+        <details class="row-more-actions product-edit-details">
+          <summary>詳細を編集</summary>
+          <div class="compact-form-grid">
+            <div class="field">
+              <label>商品名</label>
+              <input class="input table-input product-name-input" name="productName" value="${escapeAttribute(row.product.name)}" ${!canManage ? "disabled" : ""}>
+            </div>
+            <div class="field">
+              <label>商品コード</label>
+              <input class="input table-input product-code-input" name="productCode" value="${escapeAttribute(row.product.code)}" ${!canManage ? "disabled" : ""}>
+            </div>
+            <div class="field">
+              <label>カテゴリ</label>
+              <input class="input table-input" name="productCategory" value="${escapeAttribute(row.product.category)}" list="category-list" ${!canManage ? "disabled" : ""}>
+            </div>
+            <div class="field">
+              <label>バリエーション</label>
+              <input class="input table-input" name="variantName" value="${escapeAttribute(row.variant.name)}" ${!canManage ? "disabled" : ""}>
+            </div>
+            <div class="field">
+              <label>SKU</label>
+              <input class="input table-input sku-input" name="variantSku" value="${escapeAttribute(row.variant.sku)}" ${!canManage ? "disabled" : ""}>
+            </div>
+            <div class="field">
+              <label>価格</label>
+              <input class="input table-input price-input" name="variantPrice" type="number" min="0" step="1" value="${row.variant.price}" ${!canManage ? "disabled" : ""}>
+            </div>
+            <div class="field">
+              <label>表示色</label>
+              <input class="input color-picker" name="variantColor" type="color" value="${escapeAttribute(row.variant.color)}" ${!canManage ? "disabled" : ""}>
+            </div>
+          </div>
+        </details>
       </td>
-      <td>
-        <input class="input table-input" name="productCategory" value="${escapeAttribute(row.product.category)}" list="category-list" ${!canManage ? "disabled" : ""}>
+      <td data-label="価格・在庫">
+        <strong>${yen(row.variant.price)}</strong>
+        <div class="muted">現在庫 ${row.inventory.current}</div>
       </td>
-      <td>
-        <input class="input table-input" name="variantName" value="${escapeAttribute(row.variant.name)}" ${!canManage ? "disabled" : ""}>
-      </td>
-      <td>
-        <input class="input table-input sku-input" name="variantSku" value="${escapeAttribute(row.variant.sku)}" ${!canManage ? "disabled" : ""}>
-      </td>
-      <td>
-        <input class="input table-input price-input" name="variantPrice" type="number" min="0" step="1" value="${row.variant.price}" ${!canManage ? "disabled" : ""}>
-        <div class="muted">${yen(row.variant.price)}</div>
-      </td>
-      <td>
-        <input class="input color-picker" name="variantColor" type="color" value="${escapeAttribute(row.variant.color)}" ${!canManage ? "disabled" : ""}>
-      </td>
-      <td class="numeric">${row.inventory.current}</td>
-      <td><span class="status ${status}">${status === "active" ? "販売中" : "停止"}</span></td>
-      <td>
+      <td data-label="状態"><span class="status ${status}">${status === "active" ? "販売中" : "停止"}</span></td>
+      <td data-label="操作">
         <div class="row-actions">
           <button class="button secondary" data-action="save-product" data-product-id="${row.product.id}" data-variant-id="${row.variant.id}" type="button" ${!canManage ? "disabled" : ""}>
             ${icon("save")}保存
@@ -2461,6 +2622,36 @@ function renderUsers() {
       `;
 
   return `
+    ${
+      pendingUsers.length
+        ? `<section class="panel attention-panel">
+            <div class="panel-header">
+              <div>
+                <h2>承認待ちユーザー</h2>
+                <p>利用開始するには状態を「有効」にして保存してください</p>
+              </div>
+              <span class="status low">${pendingUsers.length}件</span>
+            </div>
+            <div class="panel-body">
+              <div class="list">
+                ${pendingUsers
+                  .map(
+                    (user) => `
+                      <div class="list-row">
+                        <div>
+                          <strong>${escapeHtml(user.name)}</strong>
+                          <div class="muted">${escapeHtml(user.email || roles[user.role] || "")}</div>
+                        </div>
+                        <button class="button secondary" data-action="view" data-view="users" type="button">${icon("users")}一覧で確認</button>
+                      </div>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            </div>
+          </section>`
+        : ""
+    }
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -2489,17 +2680,18 @@ function renderUsers() {
         </div>
       </div>
     </section>
-    <section class="panel">
-      <div class="panel-header">
+    <details class="panel disclosure-panel" data-panel="user-add">
+      <summary class="disclosure-summary">
         <div>
           <h2>ユーザー追加</h2>
           <p>${isSupabaseMode ? "管理者がログイン情報と権限を作成" : "操作権限のみ管理"}</p>
         </div>
-      </div>
+        <span class="status info">開く</span>
+      </summary>
       <div class="panel-body">
         ${addUserBody}
       </div>
-    </section>
+    </details>
   `;
 }
 
@@ -2583,7 +2775,13 @@ function handleClick(event) {
   }
 
   if (action === "view") {
-    ui.view = target.dataset.view;
+    const nextView = target.dataset.view;
+    if (!canAccessView(nextView)) {
+      ui.view = fallbackViewForCurrentUser();
+      showToast("現在の権限では管理画面を開けません");
+      return;
+    }
+    ui.view = nextView;
     render();
     return;
   }
@@ -2805,6 +3003,11 @@ function handleChange(event) {
   const action = target.dataset.action;
 
   if (action === "mobile-view") {
+    if (!canAccessView(target.value)) {
+      ui.view = fallbackViewForCurrentUser();
+      showToast("現在の権限では管理画面を開けません");
+      return;
+    }
     ui.view = target.value;
     render();
   }
