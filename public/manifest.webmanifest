@@ -1,6 +1,6 @@
 {
-  "name": "Merch Desk",
-  "short_name": "Merch Desk",
+  "name": "イベント物販管理",
+  "short_name": "物販管理",
   "description": "Event merchandise sales management",
   "start_url": "/",
   "scope": "/",

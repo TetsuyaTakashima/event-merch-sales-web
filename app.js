@@ -929,7 +929,7 @@ function renderLoading() {
         <div class="brand">
           <div class="brand-mark">売</div>
           <div class="brand-title">
-            <strong>Merch Desk</strong>
+            <strong>イベント物販管理</strong>
             <span>読み込み中</span>
           </div>
         </div>
@@ -958,8 +958,8 @@ function renderAuth() {
         <div class="brand">
           <div class="brand-mark">売</div>
           <div class="brand-title">
-            <strong>Merch Desk</strong>
-            <span>イベント物販管理</span>
+            <strong>イベント物販管理</strong>
+            <span>売上・在庫共有</span>
           </div>
         </div>
         <form class="stack" data-action="auth-form">
@@ -1021,7 +1021,7 @@ function renderInactiveAccount(profile = authProfile) {
         <div class="brand">
           <div class="brand-mark">売</div>
           <div class="brand-title">
-            <strong>Merch Desk</strong>
+            <strong>イベント物販管理</strong>
             <span>${label}</span>
           </div>
         </div>
@@ -1094,8 +1094,8 @@ function shell(content) {
         <div class="brand">
           <div class="brand-mark">売</div>
           <div class="brand-title">
-            <strong>Merch Desk</strong>
-            <span>${isTester ? "テスト環境" : "イベント物販管理"}</span>
+            <strong>イベント物販管理</strong>
+            <span>${isTester ? "テスト環境" : "売上・在庫管理"}</span>
           </div>
         </div>
         <select class="select mobile-nav" data-action="mobile-view" aria-label="画面選択">
