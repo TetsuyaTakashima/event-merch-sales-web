@@ -194,7 +194,7 @@ begin
       from jsonb_array_elements(coalesce(sandbox_record.data->'events', '[]'::jsonb)) as events(value)
       where value ? 'id'
         and value ? 'createdAt'
-        and value->>'createdAt' ~ '^\d{4}-\d{2}-\d{2}T'
+        and value->>'createdAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
         and (value->>'createdAt')::timestamptz < now() - interval '3 days'
     ) expired;
 
